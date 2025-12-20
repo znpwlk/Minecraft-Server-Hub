@@ -79,7 +79,6 @@ public class Main {
         addServerButton.addActionListener(this::addServer);
         topPanel.add(addServerButton);
         
-        // 添加关于按钮
         JButton aboutButton = new JButton("关于");
         aboutButton.addActionListener(e -> {
             JOptionPane.showMessageDialog(frame, 
@@ -170,7 +169,7 @@ public class Main {
                 File selectedFile = fileChooser.getSelectedFile();
                 String jarPath = selectedFile.getAbsolutePath();
                 
-                // 检查该服务器文件是否已经被添加
+
                 for (JarRunner existingRunner : jarRunners) {
                     if (existingRunner.getJarPath().equals(jarPath)) {
                         JOptionPane.showMessageDialog(frame, "该服务器文件已经被打开！", "提示", JOptionPane.WARNING_MESSAGE);
