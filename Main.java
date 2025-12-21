@@ -1,36 +1,91 @@
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.*;
-import java.net.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 public class Main {
-    private static final String VERSION = "1.0.1";
+    private static final String VERSION = "1.0.2";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
+    private static Main instance;
     private JFrame frame;
     private JTabbedPane tabbedPane;
     private List<JarRunner> jarRunners;
     private Properties config;
     private File configFile;
-    public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            try {
-                new Main().createAndShowGUI();
-            } catch (Exception e) {
-                e.printStackTrace();
+    private JTextArea logTextArea;
+    
+    public static Main getInstance() {
+        return instance;
+    }
+    
+    public JarRunner findJarRunner(String jarPath) {
+        for (JarRunner runner : jarRunners) {
+            if (runner.getJarPath().equals(jarPath)) {
+                return runner;
             }
-        });
+        }
+        return null;
+    }
+    
+    public static void main(String[] args) {
+        System.setProperty("file.encoding", java.nio.charset.Charset.defaultCharset().name());
+        System.setProperty("sun.jnu.encoding", java.nio.charset.Charset.defaultCharset().name());
+        
+        try {
+            Logger.error("CRITICAL: Application startup initiated - JVM may be unstable", "Main");
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    new Main().createAndShowGUI();
+                } catch (OutOfMemoryError e) {
+                    Logger.error("FATAL: Out of memory during GUI initialization - application cannot continue", "Main");
+                    System.err.println("FATAL ERROR: Out of memory. Application cannot continue.");
+                    System.exit(1);
+                } catch (StackOverflowError e) {
+                    Logger.error("FATAL: Stack overflow during GUI initialization - application cannot continue", "Main");
+                    System.err.println("FATAL ERROR: Stack overflow. Application cannot continue.");
+                    System.exit(1);
+                } catch (ExceptionInInitializerError e) {
+                    Logger.error("FATAL: Class initialization error during startup: " + e.getMessage(), "Main");
+                    System.err.println("FATAL ERROR: Class initialization failed. Application cannot start.");
+                    System.exit(1);
+                } catch (NoClassDefFoundError e) {
+                    Logger.error("FATAL: Required class not found during startup: " + e.getMessage(), "Main");
+                    System.err.println("FATAL ERROR: Missing required classes. Application cannot start.");
+                    System.exit(1);
+                } catch (SecurityException e) {
+                    Logger.error("FATAL: Security violation during application startup: " + e.getMessage(), "Main");
+                    System.err.println("FATAL ERROR: Security violation. Application cannot start.");
+                    System.exit(1);
+                } catch (VirtualMachineError e) {
+                    Logger.error("FATAL: JVM internal error during startup: " + e.getClass().getSimpleName() + " - " + e.getMessage(), "Main");
+                    System.err.println("FATAL ERROR: JVM internal error. Application cannot continue.");
+                    System.exit(1);
+                } catch (Exception e) {
+                    Logger.error("FATAL: Unexpected exception during GUI initialization: " + e.getClass().getSimpleName() + " - " + e.getMessage(), "Main");
+                    System.err.println("FATAL ERROR: Application startup failed.");
+                    System.exit(1);
+                }
+            });
+        } catch (Throwable t) {
+            Logger.error("CRITICAL: Fatal error in main method - application cannot start: " + t.getClass().getSimpleName() + " - " + t.getMessage(), "Main");
+            System.err.println("CRITICAL ERROR: Application cannot start. Shutting down.");
+            System.exit(1);
+        }
     }
     private void createAndShowGUI() {
+        instance = this;
+        Logger.info("程序启动", "Main");
         config = new Properties();
         configFile = new File("server_manager_config.properties");
         loadConfig();
+        Logger.info("配置文件加载完成", "Main");
         frame = new JFrame(APP_NAME + " (" + APP_SHORT_NAME + ")");
         frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         frame.addWindowListener(new WindowAdapter() {
@@ -71,7 +126,7 @@ public class Main {
                 }
             }
         });
-        frame.setSize(1000, 700);
+        frame.setSize(1200, 800);
         frame.setLayout(new BorderLayout());
         jarRunners = new ArrayList<>();
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -92,6 +147,30 @@ public class Main {
         tabbedPane = new JTabbedPane();
         frame.add(topPanel, BorderLayout.NORTH);
         frame.add(tabbedPane, BorderLayout.CENTER);
+        
+        logTextArea = new JTextArea();
+        logTextArea.setEditable(false);
+        logTextArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        logTextArea.setBackground(Color.BLACK);
+        logTextArea.setForeground(Color.WHITE);
+        JScrollPane logScrollPane = new JScrollPane(logTextArea);
+        logScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        logScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+        
+        Logger.getInstance().setLogTextArea(logTextArea);
+        Logger.info("日志系统初始化完成", "Main");
+        
+        JPanel logPanel = new JPanel(new BorderLayout());
+        JPanel logButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton clearLogButton = new JButton("清空日志");
+        clearLogButton.addActionListener(e -> {
+            Logger.getInstance().clearLogDisplay();
+        });
+        logButtonPanel.add(clearLogButton);
+        logPanel.add(logButtonPanel, BorderLayout.NORTH);
+        logPanel.add(logScrollPane, BorderLayout.CENTER);
+        
+        tabbedPane.addTab("程序日志", logPanel);
         String lastServerPath = config.getProperty("last_server_path");
         if (lastServerPath != null && !lastServerPath.isEmpty()) {
             File lastServer = new File(lastServerPath);
@@ -99,6 +178,8 @@ public class Main {
                 SwingUtilities.invokeLater(() -> {
                     addServerFromPath(lastServerPath);
                 });
+            } else {
+                Logger.warn("Last server path from configuration no longer exists: " + lastServerPath, "Main");
             }
         }
         frame.setVisible(true);
@@ -110,26 +191,146 @@ public class Main {
             config.setProperty("last_server_path", "");
             saveConfig();
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("配置文件加载失败: " + e.getMessage(), "Main");
         }
     }
     private void saveConfig() {
         try (OutputStream output = new FileOutputStream(configFile)) {
             config.store(output, APP_NAME + " Configuration");
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("配置文件保存失败: " + e.getMessage(), "Main");
         }
     }
+    
+    private void showGuardSettingsDialog(JarRunner jarRunner) {
+        JDialog dialog = new JDialog(frame, "进程守护设置", true);
+        dialog.setLayout(new BorderLayout(20, 20));
+        dialog.setSize(500, 350);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setResizable(true);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(15, 15));
+        mainPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
+        
+        JPanel topPanel = new JPanel(new BorderLayout());
+        JLabel titleLabel = new JLabel("进程守护设置");
+        titleLabel.setFont(new Font(null, Font.BOLD, 18));
+        titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        topPanel.add(titleLabel, BorderLayout.CENTER);
+        mainPanel.add(topPanel, BorderLayout.NORTH);
+        
+        JPanel contentPanel = new JPanel(new BorderLayout(15, 15));
+        
+        JPanel settingsPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.anchor = GridBagConstraints.WEST;
+        
+        JLabel enableLabel = new JLabel("启用进程守护:");
+        JCheckBox enableCheckBox = new JCheckBox();
+        enableCheckBox.setSelected(jarRunner.isAutoRestartEnabled());
+        
+        gbc.gridx = 0; gbc.gridy = 0;
+        settingsPanel.add(enableLabel, gbc);
+        gbc.gridx = 1;
+        settingsPanel.add(enableCheckBox, gbc);
+        
+        JLabel maxAttemptsLabel = new JLabel("最大重启次数:");
+        JSpinner maxAttemptsSpinner = new JSpinner(new SpinnerNumberModel(3, 1, 10, 1));
+        int[] currentSettings = jarRunner.getRestartSettings();
+        maxAttemptsSpinner.setValue(currentSettings[0]);
+        
+        gbc.gridx = 0; gbc.gridy = 1;
+        settingsPanel.add(maxAttemptsLabel, gbc);
+        gbc.gridx = 1;
+        settingsPanel.add(maxAttemptsSpinner, gbc);
+        
+        JLabel intervalLabel = new JLabel("重启间隔(秒):");
+        JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(10, 5, 300, 5));
+        intervalSpinner.setValue(currentSettings[1]);
+        
+        gbc.gridx = 0; gbc.gridy = 2;
+        settingsPanel.add(intervalLabel, gbc);
+        gbc.gridx = 1;
+        settingsPanel.add(intervalSpinner, gbc);
+        
+        contentPanel.add(settingsPanel, BorderLayout.NORTH);
+        
+        JTextArea infoText = new JTextArea("进程守护功能会在服务器进程意外终止时自动尝试重启。\n\n" +
+            "• 最大重启次数: 防止无限重启，达到次数后将停止尝试\n" +
+            "• 重启间隔: 每次重启尝试之间的等待时间\n" +
+            "• 建议设置合理的间隔时间，避免频繁重启");
+        infoText.setEditable(false);
+        infoText.setOpaque(true);
+        infoText.setBackground(new Color(240, 240, 240));
+        infoText.setFont(new Font(null, Font.PLAIN, 12));
+        infoText.setWrapStyleWord(true);
+        infoText.setLineWrap(true);
+        
+        JScrollPane scrollPane = new JScrollPane(infoText);
+        scrollPane.setBorder(new EmptyBorder(10, 0, 0, 0));
+        scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scrollPane.setMinimumSize(new Dimension(400, 120));
+        
+        contentPanel.add(scrollPane, BorderLayout.CENTER);
+        mainPanel.add(contentPanel, BorderLayout.CENTER);
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton okButton = new JButton("确定");
+        JButton cancelButton = new JButton("取消");
+        JButton applyButton = new JButton("应用");
+        
+        okButton.addActionListener(e -> {
+            boolean enabled = enableCheckBox.isSelected();
+            int maxAttempts = (Integer) maxAttemptsSpinner.getValue();
+            int interval = (Integer) intervalSpinner.getValue();
+            
+            jarRunner.setAutoRestartEnabled(enabled);
+            jarRunner.setRestartSettings(maxAttempts, interval);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 最大尝试次数: %d, 重启间隔: %d秒", 
+                enabled ? "是" : "否", maxAttempts, interval));
+            dialog.dispose();
+        });
+        
+        applyButton.addActionListener(e -> {
+            boolean enabled = enableCheckBox.isSelected();
+            int maxAttempts = (Integer) maxAttemptsSpinner.getValue();
+            int interval = (Integer) intervalSpinner.getValue();
+            
+            jarRunner.setAutoRestartEnabled(enabled);
+            jarRunner.setRestartSettings(maxAttempts, interval);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 最大尝试次数: %d, 重启间隔: %d秒", 
+                enabled ? "是" : "否", maxAttempts, interval));
+        });
+        
+        cancelButton.addActionListener(e -> dialog.dispose());
+        
+        buttonPanel.add(applyButton);
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        dialog.add(mainPanel);
+        dialog.pack();
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+    
     private void handleWindowClosing() {
+        Logger.info("程序开始关闭流程", "Main");
         jarRunners.forEach(JarRunner::stop);
+        Logger.info("已发送停止信号给所有服务器", "Main");
         try {
             Thread.sleep(1000);
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            Logger.error("关闭过程中发生中断: " + e.getMessage(), "Main");
+            Thread.currentThread().interrupt();
         }
         boolean hasRunningServer = jarRunners.stream()
             .anyMatch(runner -> runner.getStatus() != JarRunner.Status.STOPPED);
         if (hasRunningServer) {
+            Logger.warn("部分服务器无法正常关闭", "Main");
             JOptionPane.showMessageDialog(
                 frame,
                 "部分服务器无法正常关闭，可能需要手动关闭进程。",
@@ -137,9 +338,11 @@ public class Main {
                 JOptionPane.WARNING_MESSAGE
             );
         }
+        Logger.info("程序退出", "Main");
         System.exit(0);
     }
     private void addServer(ActionEvent e) {
+        Logger.info("用户点击添加服务器按钮", "Main");
         try {
             String selfPath = Main.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath();
             File selfFile = new File(selfPath);
@@ -168,10 +371,11 @@ public class Main {
             if (returnValue == JFileChooser.APPROVE_OPTION) {
                 File selectedFile = fileChooser.getSelectedFile();
                 String jarPath = selectedFile.getAbsolutePath();
-                
+                Logger.info("用户选择服务器文件: " + jarPath, "Main");
 
                 for (JarRunner existingRunner : jarRunners) {
                     if (existingRunner.getJarPath().equals(jarPath)) {
+                        Logger.warn("Attempted to add existing server file: " + jarPath, "Main");
                         JOptionPane.showMessageDialog(frame, "该服务器文件已经被打开！", "提示", JOptionPane.WARNING_MESSAGE);
                         return;
                     }
@@ -179,18 +383,41 @@ public class Main {
                 
                 config.setProperty("last_server_path", jarPath);
                 saveConfig();
+                Logger.info("保存配置文件完成", "Main");
                 addServerFromPath(jarPath);
+            } else {
+                Logger.info("用户取消添加服务器", "Main");
             }
         } catch (Exception ex) {
-            ex.printStackTrace();
+            Logger.error("添加服务器时发生异常: " + ex.getMessage(), "Main");
         }
     }
     
 
     private void addServerFromPath(String jarPath) {
+        if (jarPath == null || jarPath.trim().isEmpty()) {
+            Logger.warn("Attempted to add server with null or empty jar path", "Main");
+            return;
+        }
+        
         File jarFile = new File(jarPath);
+        if (!jarFile.exists()) {
+            Logger.warn("Attempted to add non-existent server file: " + jarPath, "Main");
+            return;
+        }
+        
+        if (!jarFile.isFile()) {
+            Logger.warn("Path is not a valid file: " + jarPath, "Main");
+            return;
+        }
+        
         String serverName = jarFile.getName();
         File serverDir = jarFile.getParentFile();
+        if (serverDir == null) {
+            Logger.warn("Could not determine server directory for: " + jarPath, "Main");
+            return;
+        }
+        
         ColorOutputPanel outputPanel = new ColorOutputPanel();
         JarRunner jarRunner = new JarRunner(jarPath, outputPanel);
         jarRunners.add(jarRunner);
@@ -375,12 +602,15 @@ public class Main {
         commandPanel.add(sendCommandButton, BorderLayout.EAST);
         JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton startButton = new JButton("启动服务器");
-        JButton stopButton = new JButton("停止服务器");
+        JButton stopButton = new JButton("关闭服务器");
+        JButton forceStopButton = new JButton("强制关闭");
         JButton restartButton = new JButton("重启服务器");
         JButton reloadButton = new JButton("重载服务器");
         JButton configButton = new JButton("配置管理");
+        JButton guardSettingsButton = new JButton("进程守护设置");
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
+        forceStopButton.setEnabled(false);
         restartButton.setEnabled(false);
         reloadButton.setEnabled(false);
         startButton.addActionListener(a -> {
@@ -389,13 +619,25 @@ public class Main {
         stopButton.addActionListener(a -> {
             int confirm = JOptionPane.showConfirmDialog(
                 frame,
-                "确定要停止服务器吗？这将中断所有玩家的游戏连接。",
-                "确认停止服务器",
+                "确定要关闭服务器吗？这将中断所有玩家的游戏连接。",
+                "确认关闭服务器",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE
             );
             if (confirm == JOptionPane.YES_OPTION) {
-                jarRunner.stop();
+                jarRunner.stopGracefully();
+            }
+        });
+        forceStopButton.addActionListener(a -> {
+            int confirm = JOptionPane.showConfirmDialog(
+                frame,
+                "确定要强制关闭服务器吗？这将立即终止服务器进程，可能导致数据丢失。",
+                "确认强制关闭服务器",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.ERROR_MESSAGE
+            );
+            if (confirm == JOptionPane.YES_OPTION) {
+                jarRunner.forceStop();
             }
         });
         restartButton.addActionListener(a -> {
@@ -415,11 +657,16 @@ public class Main {
             ConfigEditor configEditor = new ConfigEditor(frame, serverDir);
             configEditor.setVisible(true);
         });
+        guardSettingsButton.addActionListener(a -> {
+            showGuardSettingsDialog(jarRunner);
+        });
         controlPanel.add(startButton);
         controlPanel.add(stopButton);
+        controlPanel.add(forceStopButton);
         controlPanel.add(restartButton);
         controlPanel.add(reloadButton);
         controlPanel.add(configButton);
+        controlPanel.add(guardSettingsButton);
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.add(controlPanel, BorderLayout.NORTH);
         bottomPanel.add(commandPanel, BorderLayout.CENTER);
@@ -432,13 +679,21 @@ public class Main {
                 try {
                     Thread.sleep(1000);
                     JarRunner.Status currentStatus = jarRunner.getStatus();
+                    
+                    if (currentStatus == JarRunner.Status.RUNNING && !jarRunner.isProcessAlive()) {
+                        
+                        jarRunner.onProcessTerminated();
+                        currentStatus = jarRunner.getStatus(); 
+                    }
+                    final JarRunner.Status finalStatus = currentStatus;
                     SwingUtilities.invokeLater(() -> {
-                        switch (currentStatus) {
+                        switch (finalStatus) {
                             case STOPPED:
                                 statusLabel.setText("服务器状态: 已停止");
                                 statusLabel.setForeground(Color.RED);
                                 startButton.setEnabled(true);
                                 stopButton.setEnabled(false);
+                                forceStopButton.setEnabled(false);
                                 restartButton.setEnabled(false);
                                 reloadButton.setEnabled(false);
                                 break;
@@ -447,6 +702,7 @@ public class Main {
                                 statusLabel.setForeground(Color.GREEN);
                                 startButton.setEnabled(false);
                                 stopButton.setEnabled(true);
+                                forceStopButton.setEnabled(true);
                                 restartButton.setEnabled(true);
                                 reloadButton.setEnabled(true);
                                 break;
@@ -455,6 +711,7 @@ public class Main {
                                 statusLabel.setForeground(Color.ORANGE);
                                 startButton.setEnabled(false);
                                 stopButton.setEnabled(true);
+                                forceStopButton.setEnabled(true);
                                 restartButton.setEnabled(true);
                                 reloadButton.setEnabled(false);
                                 break;
@@ -463,6 +720,7 @@ public class Main {
                                 statusLabel.setForeground(Color.ORANGE);
                                 startButton.setEnabled(false);
                                 stopButton.setEnabled(false);
+                                forceStopButton.setEnabled(false);
                                 restartButton.setEnabled(false);
                                 reloadButton.setEnabled(false);
                                 break;

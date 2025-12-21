@@ -26,6 +26,7 @@ public class ConfigManager {
     }
     public void loadConfig() {
         if (!configFile.exists()) {
+            Logger.warn("Configuration file does not exist, using default configuration: " + configFile.getAbsolutePath(), "ConfigManager");
             configData.clear();
             return;
         }
@@ -36,14 +37,15 @@ public class ConfigManager {
                 loadJson();
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("Failed to load configuration file: " + configFile.getAbsolutePath() + " - " + e.getMessage(), "ConfigManager");
             configData.clear();
         }
     }
     private void loadProperties() throws IOException {
         Properties properties = new Properties();
-        try (InputStream input = new FileInputStream(configFile)) {
-            properties.load(input);
+        try (InputStream input = new FileInputStream(configFile);
+             InputStreamReader reader = new InputStreamReader(input, java.nio.charset.Charset.defaultCharset())) {
+            properties.load(reader);
             properties.forEach((key, value) -> {
                 configData.put(key.toString(), value.toString());
             });
@@ -51,14 +53,14 @@ public class ConfigManager {
     }
     private void loadJson() throws IOException {
         StringBuilder content = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new FileReader(configFile))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(configFile), java.nio.charset.Charset.defaultCharset()))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 content.append(line);
             }
         }
-        JsonParser parser = new JsonParser();
-        JsonElement element = parser.parse(content.toString());
+        Gson gson = new Gson();
+        JsonElement element = gson.fromJson(content.toString(), JsonElement.class);
         if (element.isJsonObject()) {
             JsonObject jsonObject = element.getAsJsonObject();
             jsonObject.entrySet().forEach(entry -> {
@@ -73,6 +75,7 @@ public class ConfigManager {
     }
     public void saveConfig() {
         if (!configFile.exists()) {
+            Logger.warn("Configuration file does not exist, cannot save: " + configFile.getAbsolutePath(), "ConfigManager");
             return;
         }
         try {
@@ -82,7 +85,7 @@ public class ConfigManager {
                 saveJson();
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("Failed to save configuration file: " + configFile.getAbsolutePath() + " - " + e.getMessage(), "ConfigManager");
         }
     }
     private void saveProperties() throws IOException {
@@ -90,8 +93,9 @@ public class ConfigManager {
         configData.forEach((key, value) -> {
             properties.put(key, value.toString());
         });
-        try (OutputStream output = new FileOutputStream(configFile)) {
-            properties.store(output, "Server Configuration");
+        try (OutputStream output = new FileOutputStream(configFile);
+             OutputStreamWriter writer = new OutputStreamWriter(output, java.nio.charset.Charset.defaultCharset())) {
+            properties.store(writer, "Server Configuration");
         }
     }
     private void saveJson() throws IOException {
@@ -116,7 +120,7 @@ public class ConfigManager {
                 jsonString = gson.toJson(configData);
             }
         }
-        try (FileWriter writer = new FileWriter(configFile)) {
+        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(configFile), java.nio.charset.Charset.defaultCharset())) {
             writer.write(jsonString);
         }
     }

@@ -1,25 +1,18 @@
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
 import java.io.*;
 import java.util.Map;
 import java.util.Set;
 import com.google.gson.*;
-import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableCellEditor;
-import javax.swing.table.TableCellRenderer;
-import javax.swing.event.CellEditorListener;
-import javax.swing.event.ChangeEvent;
 import javax.swing.text.DefaultFormatterFactory;
 import javax.swing.text.NumberFormatter;
 import java.text.NumberFormat;
 import java.util.List;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 public class ConfigEditor extends JDialog {
     private enum ConfigType {
         STRING, BOOLEAN, NUMBER, SELECT
@@ -43,14 +36,19 @@ public class ConfigEditor extends JDialog {
     private JTextArea jsonTextArea;
     private JTextField playerNameField;
     private Gson gson;
+    private JLabel iconPreviewLabel;
+    private JButton changeIconButton;
+    private JButton removeIconButton;
+    private BufferedImage currentIconImage;
     private Map<String, String> propertiesChineseMap;
     private Map<String, String> propertiesExplanationMap;
     private Map<String, String> originalKeysMap;
     private Map<String, ConfigType> propertiesTypeMap;
     private Map<String, List<String>> propertiesOptionsMap;
     public ConfigEditor(JFrame parent, File serverDir) {
-        super(parent, "服务器配置管理", true);
+        super(parent, "服务器配置管理", false);
         this.serverDir = serverDir;
+        setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         initUI();
         loadConfigFiles();
     }
@@ -146,6 +144,34 @@ public class ConfigEditor extends JDialog {
         jsonTextArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
         JScrollPane jsonScrollPane = new JScrollPane(jsonTextArea);
         contentPanel.add(jsonScrollPane, "json");
+        
+        JPanel iconPanel = new JPanel(new BorderLayout(10, 10));
+        JPanel iconInfoPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JLabel iconInfoLabel = new JLabel("服务器图标 (PNG格式, 64x64像素)");
+        iconInfoPanel.add(iconInfoLabel);
+        iconPanel.add(iconInfoPanel, BorderLayout.NORTH);
+        
+        JPanel iconDisplayPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        iconPreviewLabel = new JLabel("暂无图标");
+        iconPreviewLabel.setPreferredSize(new Dimension(64, 64));
+        iconPreviewLabel.setBorder(BorderFactory.createLineBorder(Color.GRAY));
+        iconPreviewLabel.setHorizontalAlignment(JLabel.CENTER);
+        iconPreviewLabel.setVerticalAlignment(JLabel.CENTER);
+        gbc.gridx = 0; gbc.gridy = 0;
+        iconDisplayPanel.add(iconPreviewLabel, gbc);
+        iconPanel.add(iconDisplayPanel, BorderLayout.CENTER);
+        
+        JPanel iconButtonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
+        changeIconButton = new JButton("更换图标");
+        changeIconButton.addActionListener(e -> changeIcon());
+        removeIconButton = new JButton("删除图标");
+        removeIconButton.addActionListener(e -> removeIcon());
+        iconButtonPanel.add(changeIconButton);
+        iconButtonPanel.add(removeIconButton);
+        iconPanel.add(iconButtonPanel, BorderLayout.SOUTH);
+        
+        contentPanel.add(iconPanel, "icon");
         add(contentPanel, BorderLayout.CENTER);
         JPanel bottomPanel = new JPanel(new BorderLayout(10, 5));
         statusLabel = new JLabel("选择配置文件开始编辑");
@@ -249,7 +275,10 @@ public class ConfigEditor extends JDialog {
                 }
             }
             configManager = new ConfigManager(selectedConfigFile);
-            if (actualFileName.endsWith(".json")) {
+            if (actualFileName.equals("server-icon.png")) {
+                loadIconToPreview();
+                contentCardLayout.show(contentPanel, "icon");
+            } else if (actualFileName.endsWith(".json")) {
                 Map<String, Object> configData = configManager.getConfigData();
                 if (isListTypeConfig(actualFileName)) {
                     loadListToTable();
@@ -677,7 +706,7 @@ public class ConfigEditor extends JDialog {
             reader.close();
             jsonTextArea.setText(content.toString());
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("Failed to load JSON configuration to text area: " + e.getMessage(), "ConfigEditor");
         }
     }
     private void loadListToTable() {
@@ -701,11 +730,13 @@ public class ConfigEditor extends JDialog {
                 listTableModel.addRow(new Object[]{name, uuid, createdAt, source, level});
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("Failed to load list configuration to table: " + e.getMessage(), "ConfigEditor");
         }
     }
     private void saveConfig() {
-        if (selectedConfigFile.getName().endsWith(".json")) {
+        if (selectedConfigFile.getName().equals("server-icon.png")) {
+            saveIcon();
+        } else if (selectedConfigFile.getName().endsWith(".json")) {
             if (isListTypeConfig(selectedConfigFile.getName())) {
                 saveListConfig();
             } else {
@@ -746,12 +777,14 @@ public class ConfigEditor extends JDialog {
     private void addPlayer() {
         String playerName = playerNameField.getText().trim();
         if (playerName.isEmpty()) {
+            Logger.warn("Attempted to add empty player name to configuration", "ConfigEditor");
             JOptionPane.showMessageDialog(this, "请输入玩家名称!");
             return;
         }
         for (int i = 0; i < listTableModel.getRowCount(); i++) {
             String existingName = (String) listTableModel.getValueAt(i, 0);
             if (existingName.equalsIgnoreCase(playerName)) {
+                Logger.warn("Attempted to add duplicate player: " + playerName, "ConfigEditor");
                 JOptionPane.showMessageDialog(this, "玩家已存在!");
                 return;
             }
@@ -763,9 +796,11 @@ public class ConfigEditor extends JDialog {
     private void removeSelectedPlayer() {
         int selectedRow = listTable.getSelectedRow();
         if (selectedRow == -1) {
+            Logger.warn("Attempted to remove player without selecting any row", "ConfigEditor");
             JOptionPane.showMessageDialog(this, "请先选择要删除的玩家!");
             return;
         }
+        Logger.info("Removing player from configuration", "ConfigEditor");
         listTableModel.removeRow(selectedRow);
     }
     private void saveListConfig() {
@@ -801,6 +836,7 @@ public class ConfigEditor extends JDialog {
                         try {
                             opLevel = Integer.parseInt(level);
                         } catch (NumberFormatException e) {
+                            Logger.error("Invalid OP level format in configuration, using default: " + level, "ConfigEditor");
                         }
                     }
                     jsonObject.addProperty("level", opLevel);
@@ -815,7 +851,7 @@ public class ConfigEditor extends JDialog {
             writer.write(jsonString);
             writer.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("Failed to save list configuration: " + e.getMessage(), "ConfigEditor");
             JOptionPane.showMessageDialog(this, "保存失败: " + e.getMessage());
         }
     }
@@ -830,8 +866,73 @@ public class ConfigEditor extends JDialog {
             writer.write(jsonTextArea.getText());
             writer.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            Logger.error("Failed to save JSON text configuration: " + e.getMessage(), "ConfigEditor");
             JOptionPane.showMessageDialog(this, "保存失败: " + e.getMessage());
+        }
+    }
+    private void loadIconToPreview() {
+        try {
+            if (selectedConfigFile.exists()) {
+                currentIconImage = ImageIO.read(selectedConfigFile);
+                ImageIcon icon = new ImageIcon(currentIconImage.getScaledInstance(64, 64, Image.SCALE_SMOOTH));
+                iconPreviewLabel.setIcon(icon);
+                iconPreviewLabel.setText("");
+            } else {
+                iconPreviewLabel.setIcon(null);
+                iconPreviewLabel.setText("暂无图标");
+                currentIconImage = null;
+            }
+        } catch (IOException e) {
+            Logger.error("Failed to load icon preview: " + e.getMessage(), "ConfigEditor");
+            iconPreviewLabel.setIcon(null);
+            iconPreviewLabel.setText("图标加载失败");
+            currentIconImage = null;
+        }
+    }
+    private void changeIcon() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("PNG 图片", "png"));
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            try {
+                BufferedImage newImage = ImageIO.read(selectedFile);
+                if (newImage != null) {
+                    currentIconImage = newImage;
+                    ImageIcon icon = new ImageIcon(newImage.getScaledInstance(64, 64, Image.SCALE_SMOOTH));
+                    iconPreviewLabel.setIcon(icon);
+                    iconPreviewLabel.setText("");
+                    statusLabel.setText("已选择新图标: " + selectedFile.getName());
+                } else {
+                    JOptionPane.showMessageDialog(this, "无法读取图片文件!");
+                }
+            } catch (IOException e) {
+                Logger.error("Failed to change icon: " + e.getMessage(), "ConfigEditor");
+                JOptionPane.showMessageDialog(this, "图片加载失败: " + e.getMessage());
+            }
+        }
+    }
+    private void removeIcon() {
+        int result = JOptionPane.showConfirmDialog(this, "确定要删除服务器图标吗?", "确认删除", JOptionPane.YES_NO_OPTION);
+        if (result == JOptionPane.YES_OPTION) {
+            if (selectedConfigFile.exists()) {
+                selectedConfigFile.delete();
+            }
+            currentIconImage = null;
+            iconPreviewLabel.setIcon(null);
+            iconPreviewLabel.setText("暂无图标");
+            statusLabel.setText("图标已删除");
+        }
+    }
+    private void saveIcon() {
+        if (currentIconImage != null) {
+            try {
+                ImageIO.write(currentIconImage, "png", selectedConfigFile);
+                statusLabel.setText("图标已保存");
+            } catch (IOException e) {
+                Logger.error("Failed to save icon: " + e.getMessage(), "ConfigEditor");
+                JOptionPane.showMessageDialog(this, "图标保存失败: " + e.getMessage());
+            }
         }
     }
 }
