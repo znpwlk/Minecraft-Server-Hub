@@ -85,7 +85,8 @@ public class Logger {
             }
             
             String fileName = String.format("%s/mshlog_%s.log", LOG_DIR, FILE_DATE_FORMAT.format(new Date()));
-            fileWriter = new PrintWriter(new BufferedWriter(new FileWriter(fileName, true)));
+            String charset = EncodingUtils.getOptimalCharset();
+            fileWriter = new PrintWriter(new BufferedWriter(new OutputStreamWriter(new FileOutputStream(fileName, true), charset)));
             
         } catch (IOException e) {
             System.err.println("Failed to initialize logger file writer: " + e.getMessage());

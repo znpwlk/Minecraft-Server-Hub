@@ -44,7 +44,7 @@ public class ConfigManager {
     private void loadProperties() throws IOException {
         Properties properties = new Properties();
         try (InputStream input = new FileInputStream(configFile);
-             InputStreamReader reader = new InputStreamReader(input, java.nio.charset.Charset.defaultCharset())) {
+             InputStreamReader reader = new InputStreamReader(input, EncodingUtils.getOptimalCharset())) {
             properties.load(reader);
             properties.forEach((key, value) -> {
                 configData.put(key.toString(), value.toString());
@@ -53,7 +53,7 @@ public class ConfigManager {
     }
     private void loadJson() throws IOException {
         StringBuilder content = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(configFile), java.nio.charset.Charset.defaultCharset()))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(configFile), EncodingUtils.getOptimalCharset()))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 content.append(line);
@@ -94,7 +94,7 @@ public class ConfigManager {
             properties.put(key, value.toString());
         });
         try (OutputStream output = new FileOutputStream(configFile);
-             OutputStreamWriter writer = new OutputStreamWriter(output, java.nio.charset.Charset.defaultCharset())) {
+             OutputStreamWriter writer = new OutputStreamWriter(output, EncodingUtils.getOptimalCharset())) {
             properties.store(writer, "Server Configuration");
         }
     }
@@ -120,7 +120,7 @@ public class ConfigManager {
                 jsonString = gson.toJson(configData);
             }
         }
-        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(configFile), java.nio.charset.Charset.defaultCharset())) {
+        try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(configFile), EncodingUtils.getOptimalCharset())) {
             writer.write(jsonString);
         }
     }

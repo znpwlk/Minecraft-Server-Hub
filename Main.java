@@ -35,8 +35,23 @@ public class Main {
     }
     
     public static void main(String[] args) {
-        System.setProperty("file.encoding", java.nio.charset.Charset.defaultCharset().name());
-        System.setProperty("sun.jnu.encoding", java.nio.charset.Charset.defaultCharset().name());
+        String osName = System.getProperty("os.name").toLowerCase();
+        String charset = "UTF-8";
+        
+        if (osName.contains("windows")) {
+            charset = "UTF-8";
+        }
+        
+        System.setProperty("file.encoding", charset);
+        System.setProperty("sun.jnu.encoding", charset);
+        System.setProperty("console.encoding", charset);
+        
+        try {
+            System.setOut(new java.io.PrintStream(System.out, true, charset));
+            System.setErr(new java.io.PrintStream(System.err, true, charset));
+        } catch (java.io.UnsupportedEncodingException e) {
+            Logger.error("Failed to set console encoding: " + e.getMessage(), "Main");
+        }
         
         try {
             Logger.error("CRITICAL: Application startup initiated - JVM may be unstable", "Main");
@@ -257,9 +272,9 @@ public class Main {
         contentPanel.add(settingsPanel, BorderLayout.NORTH);
         
         JTextArea infoText = new JTextArea("进程守护功能会在服务器进程意外终止时自动尝试重启。\n\n" +
-            "• 最大重启次数: 防止无限重启，达到次数后将停止尝试\n" +
-            "• 重启间隔: 每次重启尝试之间的等待时间\n" +
-            "• 建议设置合理的间隔时间，避免频繁重启");
+            "最大重启次数: 防止无限重启，达到次数后将停止尝试\n" +
+            "重启间隔: 每次重启尝试之间的等待时间\n" +
+            "建议设置合理的间隔时间，避免频繁重启");
         infoText.setEditable(false);
         infoText.setOpaque(true);
         infoText.setBackground(new Color(240, 240, 240));
@@ -608,6 +623,7 @@ public class Main {
         JButton reloadButton = new JButton("重载服务器");
         JButton configButton = new JButton("配置管理");
         JButton guardSettingsButton = new JButton("进程守护设置");
+        JButton networkAddressButton = new JButton("查看地址");
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
         forceStopButton.setEnabled(false);
@@ -660,6 +676,9 @@ public class Main {
         guardSettingsButton.addActionListener(a -> {
             showGuardSettingsDialog(jarRunner);
         });
+        networkAddressButton.addActionListener(a -> {
+            new AddressDialog(frame, jarRunner).show();
+        });
         controlPanel.add(startButton);
         controlPanel.add(stopButton);
         controlPanel.add(forceStopButton);
@@ -667,6 +686,7 @@ public class Main {
         controlPanel.add(reloadButton);
         controlPanel.add(configButton);
         controlPanel.add(guardSettingsButton);
+        controlPanel.add(networkAddressButton);
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.add(controlPanel, BorderLayout.NORTH);
         bottomPanel.add(commandPanel, BorderLayout.CENTER);
@@ -734,4 +754,6 @@ public class Main {
         statusThread.setDaemon(true);
         statusThread.start();
     }
+    
+
 }
