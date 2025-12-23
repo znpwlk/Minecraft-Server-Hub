@@ -2,6 +2,10 @@ import java.io.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class JarRunner {
+    public interface GameRuleCallback {
+        void onGameRuleValue(String ruleName, String value);
+    }
+    
     public enum Status {
         STOPPED, RUNNING, STARTING, STOPPING
     }
@@ -14,11 +18,14 @@ public class JarRunner {
     private volatile Status status;
     private OutputStream processInput;
     private PrintWriter commandWriter;
+    private GameRuleCallback gameRuleCallback;
     
     private boolean autoRestartEnabled;
-    private int maxRestartAttempts;
+    private int maxHourlyAttempts;
     private int restartInterval;
-    private AtomicInteger currentRestartAttempts;
+    private AtomicInteger currentHourlyAttempts;
+    private volatile long lastRestartTimestamp;
+    private Thread hourlyResetThread;
     private volatile boolean isNormalStop = false;
     
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
@@ -26,9 +33,46 @@ public class JarRunner {
         this.outputPanel = outputPanel;
         this.status = Status.STOPPED;
         this.autoRestartEnabled = false;
-        this.maxRestartAttempts = 3;
+        this.maxHourlyAttempts = 3;
         this.restartInterval = 10;
-        this.currentRestartAttempts = new AtomicInteger(0);
+        this.currentHourlyAttempts = new AtomicInteger(0);
+        this.lastRestartTimestamp = 0;
+        startHourlyResetThread();
+    }
+
+    private void startHourlyResetThread() {
+        hourlyResetThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(60000);
+                    long now = System.currentTimeMillis();
+                    if (lastRestartTimestamp > 0 && now - lastRestartTimestamp >= 3600000) {
+                        int oldValue = currentHourlyAttempts.getAndSet(0);
+                        if (oldValue > 0) {
+                            Logger.info("已重置每小时重启计数器", "JarRunner");
+                            outputPanel.append("[MSH] 已重置每小时重启计数器\n");
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        });
+        hourlyResetThread.setDaemon(true);
+        hourlyResetThread.start();
+    }
+
+    private void checkAndResetHourlyCounter() {
+        long now = System.currentTimeMillis();
+        if (lastRestartTimestamp > 0 && now - lastRestartTimestamp >= 3600000) {
+            currentHourlyAttempts.set(0);
+        }
+    }
+
+    public void cleanup() {
+        if (hourlyResetThread != null) {
+            hourlyResetThread.interrupt();
+        }
     }
     public Status getStatus() {
         return status;
@@ -47,16 +91,35 @@ public class JarRunner {
     }
     
     public void setRestartSettings(int maxAttempts, int intervalSeconds) {
-        this.maxRestartAttempts = maxAttempts;
+        this.maxHourlyAttempts = maxAttempts;
         this.restartInterval = intervalSeconds;
     }
     
     public int[] getRestartSettings() {
-        return new int[]{maxRestartAttempts, restartInterval};
+        return new int[]{maxHourlyAttempts, restartInterval};
+    }
+
+    public int getCurrentHourlyAttempts() {
+        checkAndResetHourlyCounter();
+        return currentHourlyAttempts.get();
     }
     
     public ColorOutputPanel getOutputPanel() {
         return outputPanel;
+    }
+    
+    public void setGameRuleCallback(GameRuleCallback callback) {
+        this.gameRuleCallback = callback;
+    }
+    
+    public GameRuleCallback getGameRuleCallback() {
+        return gameRuleCallback;
+    }
+    
+    public void onGameRuleValue(String ruleName, String value) {
+        if (gameRuleCallback != null) {
+            gameRuleCallback.onGameRuleValue(ruleName, value);
+        }
     }
     
     public Process getProcess() {
@@ -84,23 +147,30 @@ public class JarRunner {
         if (isNormalStop) {
             Logger.info("服务器正常停止，不进行自动重启: " + jarPath, "JarRunner");
             outputPanel.append("[MSH] 服务器正常停止，不进行自动重启\n");
+            status = Status.STOPPED;
+            cleanupProcess();
             return;
         }
         
-        if (autoRestartEnabled && currentRestartAttempts.get() < maxRestartAttempts) {
-            int attempts = currentRestartAttempts.incrementAndGet();
-            Logger.warn(String.format("检测到服务器异常终止，将在 %d 秒后尝试自动重启 (第 %d/%d 次尝试)", 
-                restartInterval, attempts, maxRestartAttempts), "JarRunner");
+        checkAndResetHourlyCounter();
+        
+        if (autoRestartEnabled && currentHourlyAttempts.get() < maxHourlyAttempts) {
+            int attempts = currentHourlyAttempts.incrementAndGet();
+            lastRestartTimestamp = System.currentTimeMillis();
+            Logger.warn(String.format("检测到服务器异常终止，将在 %d 秒后尝试自动重启 (本小时第 %d/%d 次尝试)", 
+                restartInterval, attempts, maxHourlyAttempts), "JarRunner");
             Logger.warn("WARN: Server process terminated unexpectedly - initiating auto-restart sequence", "JarRunner");
-            outputPanel.append(String.format("[MSH] 检测到服务器异常终止，将在 %d 秒后尝试自动重启 (第 %d/%d 次尝试)", 
-                restartInterval, attempts, maxRestartAttempts) + "\n");
+            outputPanel.append(String.format("[MSH] 检测到服务器异常终止，将在 %d 秒后尝试自动重启 (本小时第 %d/%d 次尝试)", 
+                restartInterval, attempts, maxHourlyAttempts) + "\n");
             
             Thread restartThread = new Thread(() -> {
                 try {
                     Thread.sleep(restartInterval * 1000);
-                    if (status == Status.STOPPED && autoRestartEnabled) {
+                    checkAndResetHourlyCounter();
+                    if (status == Status.STOPPED && autoRestartEnabled && currentHourlyAttempts.get() <= maxHourlyAttempts) {
                         Logger.info(String.format("正在执行第 %d 次自动重启", attempts), "JarRunner");
                         outputPanel.append(String.format("[MSH] 正在执行第 %d 次自动重启...", attempts) + "\n");
+                        JarRunner.this.start();
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -108,9 +178,9 @@ public class JarRunner {
             });
             restartThread.setDaemon(true);
             restartThread.start();
-        } else if (currentRestartAttempts.get() >= maxRestartAttempts) {
-            Logger.error("自动重启已达到最大尝试次数，停止重启尝试: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] 自动重启已达到最大尝试次数，停止重启尝试\n");
+        } else if (currentHourlyAttempts.get() >= maxHourlyAttempts) {
+            Logger.error("本小时内自动重启已达到最大尝试次数，停止重启尝试: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] 本小时内自动重启已达到最大尝试次数，停止重启尝试\n");
         }
     }
     public void start() {
@@ -119,7 +189,8 @@ public class JarRunner {
             return;
         }
         Logger.info("开始启动服务器: " + jarPath, "JarRunner");
-        currentRestartAttempts.set(0);
+        currentHourlyAttempts.set(0);
+        lastRestartTimestamp = 0;
         isTerminated = false;
         isNormalStop = false;
         status = Status.STARTING;
@@ -234,9 +305,23 @@ public class JarRunner {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        status = Status.RUNNING;
-        Logger.info("服务器启动成功: " + jarPath, "JarRunner");
-        outputPanel.append("[MSH] 服务器启动成功: " + jarPath + "\n");
+    }
+    
+    public void onServerFullyStarted() {
+        if (status == Status.STARTING) {
+            status = Status.RUNNING;
+            Logger.info("服务器启动成功: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] 服务器启动成功: " + jarPath + "\n");
+        }
+    }
+    
+    public void onServerStopping() {
+        if (status == Status.RUNNING) {
+            status = Status.STOPPING;
+            isNormalStop = true;
+            Logger.info("服务器正在停止: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] 服务器正在停止...\n");
+        }
     }
     public void stop() {
         if (status == Status.STOPPED || status == Status.STOPPING) {
@@ -244,10 +329,14 @@ public class JarRunner {
             return;
         }
         Logger.info("停止服务器: " + jarPath, "JarRunner");
-        if (process != null) {
-            process.destroy();
+        status = Status.STOPPING;
+        isNormalStop = true;
+        isTerminated = false;
+        if (commandWriter != null) {
+            commandWriter.println("stop");
+            commandWriter.flush();
+            outputPanel.append("[命令] stop\n");
         }
-        cleanupProcess();
     }
     
     public void forceStop() {
@@ -261,53 +350,51 @@ public class JarRunner {
         if (process != null) {
             process.destroyForcibly();
         }
-        cleanupProcess();
     }
     private void cleanupProcess() {
+        if (commandWriter != null) {
+            try {
+                commandWriter.close();
+            } catch (Exception e) {
+                Logger.error("Failed to close command writer: " + e.getMessage(), "JarRunner");
+            }
+            commandWriter = null;
+        }
+        if (processInput != null) {
+            try {
+                processInput.close();
+            } catch (IOException e) {
+                Logger.error("Failed to close process input stream: " + e.getMessage(), "JarRunner");
+            }
+            processInput = null;
+        }
+        if (stdoutThread != null && stdoutThread.isAlive()) {
+            try {
+                stdoutThread.interrupt();
+                stdoutThread.join(5000);
+            } catch (InterruptedException e) {
+                Logger.error("Failed to properly stop stdout thread: " + e.getMessage(), "JarRunner");
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                Logger.error("Unexpected error while stopping stdout thread: " + e.getMessage(), "JarRunner");
+            }
+        }
+        if (stderrThread != null && stderrThread.isAlive()) {
+            try {
+                stderrThread.interrupt();
+                stderrThread.join(5000);
+            } catch (InterruptedException e) {
+                Logger.error("Failed to properly stop stderr thread: " + e.getMessage(), "JarRunner");
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                Logger.error("Unexpected error while stopping stderr thread: " + e.getMessage(), "JarRunner");
+            }
+        }
+        if (processMonitorThread != null && processMonitorThread.isAlive()) {
+            processMonitorThread.interrupt();
+        }
+        process = null;
         if (status != Status.STOPPED) {
-            status = Status.STOPPING;
-            if (commandWriter != null) {
-                try {
-                    commandWriter.close();
-                } catch (Exception e) {
-                    Logger.error("Failed to close command writer: " + e.getMessage(), "JarRunner");
-                }
-                commandWriter = null;
-            }
-            if (processInput != null) {
-                try {
-                    processInput.close();
-                } catch (IOException e) {
-                    Logger.error("Failed to close process input stream: " + e.getMessage(), "JarRunner");
-                }
-                processInput = null;
-            }
-            if (stdoutThread != null && stdoutThread.isAlive()) {
-                try {
-                    stdoutThread.interrupt();
-                    stdoutThread.join(5000);
-                } catch (InterruptedException e) {
-                    Logger.error("Failed to properly stop stdout thread: " + e.getMessage(), "JarRunner");
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    Logger.error("Unexpected error while stopping stdout thread: " + e.getMessage(), "JarRunner");
-                }
-            }
-            if (stderrThread != null && stderrThread.isAlive()) {
-                try {
-                    stderrThread.interrupt();
-                    stderrThread.join(5000);
-                } catch (InterruptedException e) {
-                    Logger.error("Failed to properly stop stderr thread: " + e.getMessage(), "JarRunner");
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    Logger.error("Unexpected error while stopping stderr thread: " + e.getMessage(), "JarRunner");
-                }
-            }
-            if (processMonitorThread != null && processMonitorThread.isAlive()) {
-                processMonitorThread.interrupt();
-            }
-            process = null;
             status = Status.STOPPED;
             outputPanel.append("[MSH] 服务器已停止: " + jarPath + "\n");
         }
@@ -315,23 +402,18 @@ public class JarRunner {
     
 
     
-    public void stopGracefully() {
-        if (status == Status.STOPPED || status == Status.STOPPING) {
-            Logger.warn("服务器已停止或正在停止，跳过优雅停止请求: " + jarPath, "JarRunner");
-            return;
-        }
-        Logger.info("优雅停止服务器: " + jarPath, "JarRunner");
-        isNormalStop = true;
-        isTerminated = false;
-        sendCommand("stop");
-    }
-    
     public void sendCommand(String command) {
-        if (status == Status.RUNNING && commandWriter != null) {
+        if ((status == Status.RUNNING || status == Status.STOPPING) && commandWriter != null) {
             Logger.debug("发送服务器命令: " + command, "JarRunner");
             commandWriter.println(command);
             commandWriter.flush();
             outputPanel.append("[命令] " + command + "\n");
+            String cmdLower = command.toLowerCase().trim();
+            if (cmdLower.equals("stop") || cmdLower.equals("/stop")) {
+                isNormalStop = true;
+                isTerminated = false;
+                status = Status.STOPPING;
+            }
         } else {
             Logger.warn("服务器未运行，无法发送命令: " + command, "JarRunner");
         }

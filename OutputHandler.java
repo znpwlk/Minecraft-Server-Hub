@@ -4,8 +4,11 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.JOptionPane;
 public class OutputHandler implements Runnable {
+    private static final Pattern GAMERULE_PATTERN = Pattern.compile("\\[\\d{2}:\\d{2}:\\d{2} (?:INFO|WARN|ERROR)\\]: Gamerule (.+?) is currently set to: (true|false|\\d+)");
     private BufferedReader reader;
     private ColorOutputPanel outputPanel;
     private JarRunner jarRunner;
@@ -64,6 +67,7 @@ public class OutputHandler implements Runnable {
                         outputPanel.append("[MSH] 生成区域准备完成\n");
                     } else if (line.contains("Done (")) {
                         outputPanel.append("[MSH] 服务器已成功启动！\n");
+                        jarRunner.onServerFullyStarted();
                     } else if (line.contains("This is the first time you're starting this server")) {
                         outputPanel.append("[MSH] 首次启动服务器，建议阅读官方文档: https://docs.papermc.io/paper/next-steps\n");
                     } else if (line.contains("There are") && line.contains("players online")) {
@@ -105,8 +109,9 @@ public class OutputHandler implements Runnable {
                         outputPanel.append("[MSH] 出生点区域准备完成\n");
                     } else if (line.contains("Running delayed init tasks")) {
                         outputPanel.append("[MSH] 正在执行延迟初始化任务...\n");
-                    } else if (line.contains("Stopping server")) {
+                    } else if (line.contains("Stopping the server") || line.contains("Stopping server")) {
                         outputPanel.append("[MSH] 正在停止服务器...\n");
+                        jarRunner.onServerStopping();
                     } else if (line.contains("Saving players")) {
                         outputPanel.append("[MSH] 正在保存玩家数据...\n");
                     } else if (line.contains("Saving worlds")) {
@@ -126,6 +131,17 @@ public class OutputHandler implements Runnable {
                         outputPanel.append("[MSH] 服务器正在运行 Paper 版本: " + line.substring(line.indexOf("Paper version") + 14).trim() + "\n");
                     } else if (line.contains("You are running the latest version")) {
                         outputPanel.append("[MSH] 您正在运行最新版本\n");
+                    }
+                    
+                    Matcher gameruleMatcher = GAMERULE_PATTERN.matcher(line);
+                    if (gameruleMatcher.find()) {
+                        String ruleName = gameruleMatcher.group(1).trim();
+                        String ruleValue = gameruleMatcher.group(2).trim();
+                        Logger.info("DEBUG: 解析到游戏规则 - " + ruleName + " = " + ruleValue, "OutputHandler");
+                        jarRunner.onGameRuleValue(ruleName, ruleValue);
+                    } else if (line.contains("Gamerule") && line.contains("is currently set to")) {
+                        Logger.info("DEBUG: 包含Gamerule但未匹配, 原始行: " + line, "OutputHandler");
+                        Logger.info("DEBUG: 正则模式: " + GAMERULE_PATTERN.pattern(), "OutputHandler");
                     }
                 } catch (OutOfMemoryError e) {
                     Logger.error("FATAL: Out of memory during output processing for: " + jarPath + " - " + e.getMessage(), "OutputHandler");

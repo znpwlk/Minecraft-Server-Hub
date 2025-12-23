@@ -338,7 +338,7 @@ public class ConfigEditor extends JDialog {
         propertiesChineseMap.put("server-port", "服务器端口");
         propertiesChineseMap.put("server-ip", "服务器IP");
         propertiesChineseMap.put("max-players", "最大玩家数");
-        propertiesChineseMap.put("online-mode", "在线模式");
+        propertiesChineseMap.put("online-mode", "正版验证");
         propertiesChineseMap.put("white-list", "启用白名单");
         propertiesChineseMap.put("enforce-whitelist", "强制白名单");
         propertiesChineseMap.put("motd", "服务器描述");
@@ -416,7 +416,7 @@ public class ConfigEditor extends JDialog {
         propertiesExplanationMap.put("server-port", "服务器端口，默认为25565。需确保防火墙开放此端口，否则玩家无法连接");
         propertiesExplanationMap.put("server-ip", "服务器绑定的IP地址，留空则绑定所有网卡。填写特定IP可限制服务器只在该IP上监听连接");
         propertiesExplanationMap.put("max-players", "服务器最大玩家数量，默认为20。根据服务器硬件性能调整，过高可能导致服务器卡顿");
-        propertiesExplanationMap.put("online-mode", "是否启用在线验证：true（正版验证，只有正版玩家可以连接）、false（离线模式，所有玩家都可以连接）。false时可能会有盗版玩家进入，建议正版服务器设置为true");
+        propertiesExplanationMap.put("online-mode", "是否启用正版验证：true（验证，仅正版玩家可进入）、false（离线模式，所有玩家可进入）。正版服务器建议设为true");
         propertiesExplanationMap.put("white-list", "是否启用白名单：true（启用，只有白名单玩家可以进入）、false（禁用，所有玩家都可以进入）。启用后需要手动添加玩家到白名单");
         propertiesExplanationMap.put("enforce-whitelist", "是否强制启用白名单：true（强制，忽略OP权限，只有白名单玩家可进入）、false（不强制，OP玩家不受白名单限制）。true时即使是OP玩家也必须在白名单中才能进入");
         propertiesExplanationMap.put("motd", "服务器描述，显示在服务器列表中，支持颜色代码。用于吸引玩家加入，建议简洁明了");

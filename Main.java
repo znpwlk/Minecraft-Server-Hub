@@ -98,7 +98,11 @@ public class Main {
         instance = this;
         Logger.info("程序启动", "Main");
         config = new Properties();
-        configFile = new File("server_manager_config.properties");
+        File mshDir = new File("MSH");
+        if (!mshDir.exists()) {
+            mshDir.mkdirs();
+        }
+        configFile = new File(mshDir, "server_manager_config.properties");
         loadConfig();
         Logger.info("配置文件加载完成", "Main");
         frame = new JFrame(APP_NAME + " (" + APP_SHORT_NAME + ")");
@@ -160,6 +164,20 @@ public class Main {
         });
         topPanel.add(aboutButton);
         tabbedPane = new JTabbedPane();
+        tabbedPane.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    showTabCloseMenu(e);
+                }
+            }
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                if (e.isPopupTrigger()) {
+                    showTabCloseMenu(e);
+                }
+            }
+        });
         frame.add(topPanel, BorderLayout.NORTH);
         frame.add(tabbedPane, BorderLayout.CENTER);
         
@@ -216,6 +234,31 @@ public class Main {
             Logger.error("配置文件保存失败: " + e.getMessage(), "Main");
         }
     }
+
+    private void saveGuardConfig(String jarPath, boolean enabled, int maxAttempts, int interval) {
+        String keyPrefix = "guard." + jarPath + ".";
+        config.setProperty(keyPrefix + "enabled", String.valueOf(enabled));
+        config.setProperty(keyPrefix + "maxAttempts", String.valueOf(maxAttempts));
+        config.setProperty(keyPrefix + "interval", String.valueOf(interval));
+        saveConfig();
+    }
+
+    private Object[] loadGuardConfig(String jarPath) {
+        String keyPrefix = "guard." + jarPath + ".";
+        String enabledStr = config.getProperty(keyPrefix + "enabled");
+        String maxAttemptsStr = config.getProperty(keyPrefix + "maxAttempts");
+        String intervalStr = config.getProperty(keyPrefix + "interval");
+
+        if (enabledStr == null || maxAttemptsStr == null || intervalStr == null) {
+            return null;
+        }
+
+        return new Object[]{
+            Boolean.parseBoolean(enabledStr),
+            Integer.parseInt(maxAttemptsStr),
+            Integer.parseInt(intervalStr)
+        };
+    }
     
     private void showGuardSettingsDialog(JarRunner jarRunner) {
         JDialog dialog = new JDialog(frame, "进程守护设置", true);
@@ -250,9 +293,10 @@ public class Main {
         gbc.gridx = 1;
         settingsPanel.add(enableCheckBox, gbc);
         
-        JLabel maxAttemptsLabel = new JLabel("最大重启次数:");
+        JLabel maxAttemptsLabel = new JLabel("每小时最大重启次数:");
         JSpinner maxAttemptsSpinner = new JSpinner(new SpinnerNumberModel(3, 1, 10, 1));
         int[] currentSettings = jarRunner.getRestartSettings();
+        int currentAttempts = jarRunner.getCurrentHourlyAttempts();
         maxAttemptsSpinner.setValue(currentSettings[0]);
         
         gbc.gridx = 0; gbc.gridy = 1;
@@ -260,11 +304,15 @@ public class Main {
         gbc.gridx = 1;
         settingsPanel.add(maxAttemptsSpinner, gbc);
         
+        JLabel currentAttemptsLabel = new JLabel("本小时已重启: " + currentAttempts + " 次");
+        gbc.gridx = 0; gbc.gridy = 2;
+        settingsPanel.add(currentAttemptsLabel, gbc);
+        
         JLabel intervalLabel = new JLabel("重启间隔(秒):");
         JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(10, 5, 300, 5));
         intervalSpinner.setValue(currentSettings[1]);
         
-        gbc.gridx = 0; gbc.gridy = 2;
+        gbc.gridx = 0; gbc.gridy = 3;
         settingsPanel.add(intervalLabel, gbc);
         gbc.gridx = 1;
         settingsPanel.add(intervalSpinner, gbc);
@@ -272,7 +320,7 @@ public class Main {
         contentPanel.add(settingsPanel, BorderLayout.NORTH);
         
         JTextArea infoText = new JTextArea("进程守护功能会在服务器进程意外终止时自动尝试重启。\n\n" +
-            "最大重启次数: 防止无限重启，达到次数后将停止尝试\n" +
+            "每小时最大重启次数: 防止无限重启，每小时达到次数后将停止尝试\n" +
             "重启间隔: 每次重启尝试之间的等待时间\n" +
             "建议设置合理的间隔时间，避免频繁重启");
         infoText.setEditable(false);
@@ -303,7 +351,8 @@ public class Main {
             
             jarRunner.setAutoRestartEnabled(enabled);
             jarRunner.setRestartSettings(maxAttempts, interval);
-            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 最大尝试次数: %d, 重启间隔: %d秒", 
+            saveGuardConfig(jarRunner.getJarPath(), enabled, maxAttempts, interval);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒", 
                 enabled ? "是" : "否", maxAttempts, interval));
             dialog.dispose();
         });
@@ -315,7 +364,8 @@ public class Main {
             
             jarRunner.setAutoRestartEnabled(enabled);
             jarRunner.setRestartSettings(maxAttempts, interval);
-            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 最大尝试次数: %d, 重启间隔: %d秒", 
+            saveGuardConfig(jarRunner.getJarPath(), enabled, maxAttempts, interval);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒", 
                 enabled ? "是" : "否", maxAttempts, interval));
         });
         
@@ -355,6 +405,60 @@ public class Main {
         }
         Logger.info("程序退出", "Main");
         System.exit(0);
+    }
+
+    private void showTabCloseMenu(java.awt.event.MouseEvent e) {
+        int tabIndex = tabbedPane.indexAtLocation(e.getX(), e.getY());
+        if (tabIndex <= 0) {
+            return;
+        }
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem closeItem = new JMenuItem("关闭标签页");
+        closeItem.addActionListener(a -> closeServerTab(tabIndex));
+        menu.add(closeItem);
+        menu.show(e.getComponent(), e.getX(), e.getY());
+    }
+
+    private void closeServerTab(int tabIndex) {
+        if (tabIndex <= 0) {
+            return;
+        }
+        JarRunner jarRunner = jarRunners.get(tabIndex - 1);
+        if (jarRunner.getStatus() == JarRunner.Status.RUNNING || 
+            jarRunner.getStatus() == JarRunner.Status.STARTING) {
+            int choice = JOptionPane.showConfirmDialog(
+                frame,
+                "服务器正在运行中，是否先关闭服务器？\n选择\"是\"将关闭服务器并移除标签页\n选择\"否\"将直接移除标签页（服务器继续在后台运行）",
+                "关闭标签页",
+                JOptionPane.YES_NO_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+            );
+            if (choice == JOptionPane.YES_OPTION) {
+                jarRunner.stop();
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(2000);
+                        SwingUtilities.invokeLater(() -> removeTab(tabIndex));
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                    }
+                }).start();
+                return;
+            } else if (choice == JOptionPane.CANCEL_OPTION) {
+                return;
+            }
+        }
+        removeTab(tabIndex);
+    }
+
+    private void removeTab(int tabIndex) {
+        if (tabIndex <= 0) {
+            return;
+        }
+        JarRunner jarRunner = jarRunners.get(tabIndex - 1);
+        jarRunner.cleanup();
+        jarRunners.remove(tabIndex - 1);
+        tabbedPane.removeTabAt(tabIndex);
     }
     private void addServer(ActionEvent e) {
         Logger.info("用户点击添加服务器按钮", "Main");
@@ -435,6 +539,13 @@ public class Main {
         
         ColorOutputPanel outputPanel = new ColorOutputPanel();
         JarRunner jarRunner = new JarRunner(jarPath, outputPanel);
+
+        Object[] guardConfig = loadGuardConfig(jarPath);
+        if (guardConfig != null) {
+            jarRunner.setAutoRestartEnabled((Boolean) guardConfig[0]);
+            jarRunner.setRestartSettings((Integer) guardConfig[1], (Integer) guardConfig[2]);
+        }
+
         jarRunners.add(jarRunner);
         JPanel serverPanel = new JPanel(new BorderLayout());
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -624,6 +735,7 @@ public class Main {
         JButton configButton = new JButton("配置管理");
         JButton guardSettingsButton = new JButton("进程守护设置");
         JButton networkAddressButton = new JButton("查看地址");
+        JButton gameRuleButton = new JButton("游戏规则");
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
         forceStopButton.setEnabled(false);
@@ -641,7 +753,7 @@ public class Main {
                 JOptionPane.WARNING_MESSAGE
             );
             if (confirm == JOptionPane.YES_OPTION) {
-                jarRunner.stopGracefully();
+                jarRunner.stop();
             }
         });
         forceStopButton.addActionListener(a -> {
@@ -679,6 +791,9 @@ public class Main {
         networkAddressButton.addActionListener(a -> {
             new AddressDialog(frame, jarRunner).show();
         });
+        gameRuleButton.addActionListener(a -> {
+            GameRuleDialog.showDialog(frame, jarRunner);
+        });
         controlPanel.add(startButton);
         controlPanel.add(stopButton);
         controlPanel.add(forceStopButton);
@@ -687,6 +802,7 @@ public class Main {
         controlPanel.add(configButton);
         controlPanel.add(guardSettingsButton);
         controlPanel.add(networkAddressButton);
+        controlPanel.add(gameRuleButton);
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.add(controlPanel, BorderLayout.NORTH);
         bottomPanel.add(commandPanel, BorderLayout.CENTER);

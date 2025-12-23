@@ -7,7 +7,7 @@ import java.util.concurrent.Executors;
 import javax.swing.*;
 
 public class Logger {
-    private static final String LOG_DIR = "mshlog";
+    private static final String LOG_DIR = "MSH";
     private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
     private static final SimpleDateFormat FILE_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
     
