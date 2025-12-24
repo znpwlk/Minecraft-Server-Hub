@@ -10,6 +10,7 @@ public class JarRunner {
         STOPPED, RUNNING, STARTING, STOPPING
     }
     private String jarPath;
+    private String customName;
     private ColorOutputPanel outputPanel;
     private Process process;
     private Thread stdoutThread;
@@ -30,6 +31,7 @@ public class JarRunner {
     
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
         this.jarPath = jarPath;
+        this.customName = null;
         this.outputPanel = outputPanel;
         this.status = Status.STOPPED;
         this.autoRestartEnabled = false;
@@ -80,6 +82,22 @@ public class JarRunner {
     
     public String getJarPath() {
         return jarPath;
+    }
+    
+    public String getCustomName() {
+        return customName;
+    }
+    
+    public void setCustomName(String name) {
+        this.customName = name;
+    }
+    
+    public String getDisplayName() {
+        if (customName != null && !customName.trim().isEmpty()) {
+            return customName;
+        }
+        File jarFile = new File(jarPath);
+        return jarFile.getName();
     }
     
     public boolean isAutoRestartEnabled() {

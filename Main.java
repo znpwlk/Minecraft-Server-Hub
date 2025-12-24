@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 public class Main {
-    private static final String VERSION = "1.0.2";
+    private static final String VERSION = "1.0.5";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -20,9 +20,97 @@ public class Main {
     private Properties config;
     private File configFile;
     private JTextArea logTextArea;
+    private List<TabLabel> tabLabels = new ArrayList<>();
+    
+    private static class TabLabel extends JPanel {
+        private JLabel label;
+        private static final int MAX_WIDTH = 100;
+        
+        public TabLabel(String text, Font font) {
+            setOpaque(false);
+            setLayout(new BorderLayout());
+            setPreferredSize(new Dimension(MAX_WIDTH, 25));
+            setMaximumSize(new Dimension(MAX_WIDTH, 25));
+            
+            label = new JLabel(text == null ? "" : text);
+            label.setFont(font);
+            if (text != null && text.length() > 12) {
+                setToolTipText(text);
+            }
+            add(label, BorderLayout.WEST);
+            
+            addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override
+                public void mousePressed(java.awt.event.MouseEvent e) {
+                    if (e.getButton() == java.awt.event.MouseEvent.BUTTON3) {
+                        e.consume();
+                        handleRightClick(e);
+                    } else if (e.getButton() == java.awt.event.MouseEvent.BUTTON1) {
+                        Container parent = getParent();
+                        while (parent != null) {
+                            if (parent instanceof JTabbedPane) {
+                                JTabbedPane tabPane = (JTabbedPane) parent;
+                                for (int i = 0; i < tabPane.getTabCount(); i++) {
+                                    if (tabPane.getTabComponentAt(i) == TabLabel.this) {
+                                        tabPane.setSelectedIndex(i);
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                            parent = parent.getParent();
+                        }
+                    }
+                }
+                
+                @Override
+                public void mouseReleased(java.awt.event.MouseEvent e) {
+                    if (e.getButton() == java.awt.event.MouseEvent.BUTTON3) {
+                        e.consume();
+                        handleRightClick(e);
+                    }
+                }
+            });
+        }
+        
+        private void handleRightClick(java.awt.event.MouseEvent e) {
+             int index = -1;
+             Container parent = getParent();
+             while (parent != null) {
+                 if (parent instanceof JTabbedPane) {
+                     JTabbedPane tabbedPane = (JTabbedPane) parent;
+                     for (int i = 0; i < tabbedPane.getTabCount(); i++) {
+                         if (tabbedPane.getTabComponentAt(i) == TabLabel.this) {
+                             index = i;
+                             break;
+                         }
+                     }
+                     break;
+                 }
+                 parent = parent.getParent();
+             }
+             if (index >= 0) {
+                 Point screenPoint = SwingUtilities.convertPoint(TabLabel.this, e.getX(), e.getY(), Main.getInstance().getFrame());
+                 Main.getInstance().showTabContextMenu(index, screenPoint.x, screenPoint.y);
+             }
+         }
+        
+        public void setText(String text) {
+            label.setText(text == null ? "" : text);
+            if (text != null && text.length() > 12) {
+                setToolTipText(text);
+            } else {
+                setToolTipText(null);
+            }
+        }
+    }
     
     public static Main getInstance() {
         return instance;
+    }
+    
+    public JFrame getFrame() {
+        return frame;
     }
     
     public JarRunner findJarRunner(String jarPath) {
@@ -158,7 +246,9 @@ public class Main {
             JOptionPane.showMessageDialog(frame, 
                 APP_NAME + " (" + APP_SHORT_NAME + ")\n\n" +
                 "版本: " + VERSION + "\n" +
-                "作者: " + AUTHOR + "\n" +
+                "作者: " + AUTHOR + "\n\n" +
+                "官网: https://msh.znpwlk.vip/\n" +
+                "GitHub: https://github.com/znpwlk/Minecraft-Server-Hub\n\n" +
                 "功能: 管理Minecraft服务器", 
                 "关于", JOptionPane.INFORMATION_MESSAGE);
         });
@@ -168,13 +258,15 @@ public class Main {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
                 if (e.isPopupTrigger()) {
-                    showTabCloseMenu(e);
+                    int tabIndex = tabbedPane.indexAtLocation(e.getX(), e.getY());
+                    showTabContextMenu(tabIndex, e.getX(), e.getY());
                 }
             }
             @Override
             public void mouseReleased(java.awt.event.MouseEvent e) {
                 if (e.isPopupTrigger()) {
-                    showTabCloseMenu(e);
+                    int tabIndex = tabbedPane.indexAtLocation(e.getX(), e.getY());
+                    showTabContextMenu(tabIndex, e.getX(), e.getY());
                 }
             }
         });
@@ -233,6 +325,21 @@ public class Main {
         } catch (IOException e) {
             Logger.error("配置文件保存失败: " + e.getMessage(), "Main");
         }
+    }
+
+    private void saveCustomName(String jarPath, String customName) {
+        String key = "customname." + jarPath;
+        if (customName == null || customName.trim().isEmpty()) {
+            config.remove(key);
+        } else {
+            config.setProperty(key, customName);
+        }
+        saveConfig();
+    }
+
+    private String loadCustomName(String jarPath) {
+        String key = "customname." + jarPath;
+        return config.getProperty(key);
     }
 
     private void saveGuardConfig(String jarPath, boolean enabled, int maxAttempts, int interval) {
@@ -352,7 +459,7 @@ public class Main {
             jarRunner.setAutoRestartEnabled(enabled);
             jarRunner.setRestartSettings(maxAttempts, interval);
             saveGuardConfig(jarRunner.getJarPath(), enabled, maxAttempts, interval);
-            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒", 
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒\n", 
                 enabled ? "是" : "否", maxAttempts, interval));
             dialog.dispose();
         });
@@ -365,7 +472,7 @@ public class Main {
             jarRunner.setAutoRestartEnabled(enabled);
             jarRunner.setRestartSettings(maxAttempts, interval);
             saveGuardConfig(jarRunner.getJarPath(), enabled, maxAttempts, interval);
-            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒", 
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒\n", 
                 enabled ? "是" : "否", maxAttempts, interval));
         });
         
@@ -407,16 +514,88 @@ public class Main {
         System.exit(0);
     }
 
-    private void showTabCloseMenu(java.awt.event.MouseEvent e) {
-        int tabIndex = tabbedPane.indexAtLocation(e.getX(), e.getY());
+    private void showTabContextMenu(int tabIndex, int x, int y) {
         if (tabIndex <= 0) {
             return;
         }
         JPopupMenu menu = new JPopupMenu();
+        JMenuItem renameItem = new JMenuItem("重命名");
+        renameItem.addActionListener(a -> renameServerTab(tabIndex));
+        menu.add(renameItem);
+        
         JMenuItem closeItem = new JMenuItem("关闭标签页");
         closeItem.addActionListener(a -> closeServerTab(tabIndex));
         menu.add(closeItem);
-        menu.show(e.getComponent(), e.getX(), e.getY());
+        
+        menu.show(frame, x, y);
+    }
+
+    private void renameServerTab(int tabIndex) {
+        if (tabIndex <= 0) {
+            return;
+        }
+        JarRunner jarRunner = jarRunners.get(tabIndex - 1);
+        String currentName = jarRunner.getDisplayName();
+        String jarFileName = new File(jarRunner.getJarPath()).getName();
+        
+        JDialog renameDialog = new JDialog(frame, "重命名标签页", true);
+        renameDialog.setLayout(new BorderLayout(15, 15));
+        renameDialog.setSize(400, 180);
+        renameDialog.setLocationRelativeTo(frame);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(15, 15));
+        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
+        
+        JPanel labelPanel = new JPanel(new BorderLayout());
+        JLabel noteLabel = new JLabel("<html>设置服务端显示名称（不会修改真实文件名）<br>当前文件名为: " + jarFileName + "</html>");
+        noteLabel.setFont(new Font(null, Font.PLAIN, 11));
+        labelPanel.add(noteLabel, BorderLayout.CENTER);
+        mainPanel.add(labelPanel, BorderLayout.NORTH);
+        
+        JPanel inputPanel = new JPanel(new BorderLayout(5, 5));
+        JTextField nameField = new JTextField(currentName);
+        nameField.selectAll();
+        inputPanel.add(nameField, BorderLayout.CENTER);
+        mainPanel.add(inputPanel, BorderLayout.CENTER);
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton okButton = new JButton("确定");
+        JButton cancelButton = new JButton("取消");
+        JButton resetButton = new JButton("恢复默认名称");
+        
+        okButton.addActionListener(a -> {
+            String newName = nameField.getText();
+            if (newName != null && !newName.trim().isEmpty()) {
+                jarRunner.setCustomName(newName.trim());
+                saveCustomName(jarRunner.getJarPath(), newName.trim());
+                if (tabIndex > 0 && tabIndex <= tabLabels.size()) {
+                    tabLabels.get(tabIndex - 1).setText(newName.trim());
+                }
+                jarRunner.getOutputPanel().append("[MS] 标签页已重命名为: " + newName.trim() + "\n");
+            } else {
+                jarRunner.setCustomName(null);
+                saveCustomName(jarRunner.getJarPath(), null);
+                if (tabIndex > 0 && tabIndex <= tabLabels.size()) {
+                    tabLabels.get(tabIndex - 1).setText(jarFileName);
+                }
+                jarRunner.getOutputPanel().append("[MS] 标签页名称已恢复为默认\n");
+            }
+            renameDialog.dispose();
+        });
+        
+        cancelButton.addActionListener(a -> renameDialog.dispose());
+        
+        resetButton.addActionListener(a -> {
+            nameField.setText(jarFileName);
+        });
+        
+        buttonPanel.add(resetButton);
+        buttonPanel.add(cancelButton);
+        buttonPanel.add(okButton);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        renameDialog.add(mainPanel);
+        renameDialog.setVisible(true);
     }
 
     private void closeServerTab(int tabIndex) {
@@ -458,6 +637,9 @@ public class Main {
         JarRunner jarRunner = jarRunners.get(tabIndex - 1);
         jarRunner.cleanup();
         jarRunners.remove(tabIndex - 1);
+        if (tabIndex - 1 < tabLabels.size()) {
+            tabLabels.remove(tabIndex - 1);
+        }
         tabbedPane.removeTabAt(tabIndex);
     }
     private void addServer(ActionEvent e) {
@@ -530,7 +712,6 @@ public class Main {
             return;
         }
         
-        String serverName = jarFile.getName();
         File serverDir = jarFile.getParentFile();
         if (serverDir == null) {
             Logger.warn("Could not determine server directory for: " + jarPath, "Main");
@@ -547,6 +728,14 @@ public class Main {
         }
 
         jarRunners.add(jarRunner);
+        
+        String customName = loadCustomName(jarPath);
+        if (customName != null) {
+            jarRunner.setCustomName(customName);
+        }
+        
+        String displayName = jarRunner.getDisplayName();
+        
         JPanel serverPanel = new JPanel(new BorderLayout());
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JLabel statusLabel = new JLabel("服务器状态: 已停止");
@@ -808,7 +997,10 @@ public class Main {
         bottomPanel.add(commandPanel, BorderLayout.CENTER);
         serverPanel.add(bottomPanel, BorderLayout.SOUTH);
         int tabIndex = tabbedPane.getTabCount();
-        tabbedPane.addTab(serverName, serverPanel);
+        tabbedPane.addTab("placeholder", serverPanel);
+        TabLabel tabLabel = new TabLabel(displayName, tabbedPane.getFont());
+        tabLabels.add(tabLabel);
+        tabbedPane.setTabComponentAt(tabIndex, tabLabel);
         tabbedPane.setSelectedIndex(tabIndex);
         Thread statusThread = new Thread(() -> {
             while (true) {
