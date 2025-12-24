@@ -112,6 +112,7 @@ public class ConfigEditor extends JDialog {
         configTable.getColumnModel().getColumn(0).setPreferredWidth(250);
         configTable.getColumnModel().getColumn(1).setPreferredWidth(550);
         JScrollPane tableScrollPane = new JScrollPane(configTable);
+        tableScrollPane.setBorder(BorderFactory.createEmptyBorder(1, 1, 1, 1));
         contentPanel.add(tableScrollPane, "table");
         JPanel listEditorPanel = new JPanel(new BorderLayout(10, 10));
         String[] listColumnNames = {"玩家名称", "UUID", "创建时间", "来源", "权限等级"};
@@ -414,7 +415,7 @@ public class ConfigEditor extends JDialog {
         propertiesExplanationMap.put("spawn-protection", "出生点保护范围，单位为方块，默认为16。保护范围内只有OP玩家可以破坏或放置方块，0表示关闭保护");
         propertiesExplanationMap.put("enable-code-of-conduct", "是否启用Mojang行为准则系统：true（启用）、false（禁用）。启用后玩家可以举报违规行为，服务器会收到举报信息");
         propertiesExplanationMap.put("server-port", "服务器端口，默认为25565。需确保防火墙开放此端口，否则玩家无法连接");
-        propertiesExplanationMap.put("server-ip", "服务器绑定的IP地址，留空则绑定所有网卡。填写特定IP可限制服务器只在该IP上监听连接");
+        propertiesExplanationMap.put("server-ip", "服务器绑定的IP地址：留空或0.0.0.0表示绑定所有网卡（允许公网访问，需要公网IP和端口转发），127.0.0.1表示仅本地连接。自定义IP可以指定特定网络接口。公网开放请确保防火墙和路由器已开放端口");
         propertiesExplanationMap.put("max-players", "服务器最大玩家数量，默认为20。根据服务器硬件性能调整，过高可能导致服务器卡顿");
         propertiesExplanationMap.put("online-mode", "是否启用正版验证：true（验证，仅正版玩家可进入）、false（离线模式，所有玩家可进入）。正版服务器建议设为true");
         propertiesExplanationMap.put("white-list", "是否启用白名单：true（启用，只有白名单玩家可以进入）、false（禁用，所有玩家都可以进入）。启用后需要手动添加玩家到白名单");
@@ -511,6 +512,7 @@ public class ConfigEditor extends JDialog {
         propertiesTypeMap.put("use-vanilla-world-seed", ConfigType.BOOLEAN);
         propertiesTypeMap.put("max-players", ConfigType.NUMBER);
         propertiesTypeMap.put("server-port", ConfigType.NUMBER);
+        propertiesTypeMap.put("server-ip", ConfigType.SELECT);
         propertiesTypeMap.put("rcon.port", ConfigType.NUMBER);
         propertiesTypeMap.put("query.port", ConfigType.NUMBER);
         propertiesTypeMap.put("max-build-height", ConfigType.NUMBER);
@@ -591,6 +593,11 @@ public class ConfigEditor extends JDialog {
         compressionOptions.add("deflate");
         compressionOptions.add("none");
         propertiesOptionsMap.put("region-file-compression", compressionOptions);
+        List<String> serverIpOptions = new ArrayList<>();
+        serverIpOptions.add("0.0.0.0 (所有网络接口)");
+        serverIpOptions.add("127.0.0.1 (仅本地)");
+        serverIpOptions.add("自定义");
+        propertiesOptionsMap.put("server-ip", serverIpOptions);
         List<String> booleanOptions = new ArrayList<>();
         booleanOptions.add("true");
         booleanOptions.add("false");
@@ -668,23 +675,175 @@ public class ConfigEditor extends JDialog {
         public NumberCellEditor() {
             super(new JFormattedTextField());
             JFormattedTextField textField = (JFormattedTextField) getComponent();
-            NumberFormat format = NumberFormat.getInstance();
+            NumberFormat format = NumberFormat.getIntegerInstance();
+            format.setGroupingUsed(false);
             NumberFormatter formatter = new NumberFormatter(format);
             formatter.setAllowsInvalid(false);
             textField.setFormatterFactory(new DefaultFormatterFactory(formatter));
         }
     }
+    @SuppressWarnings("unchecked")
     private class ComboBoxCellEditor extends DefaultCellEditor {
-        public ComboBoxCellEditor(List<String> options) {
-            super(new JComboBox<>(options.toArray(new String[0])));
+        private JComboBox<String> comboBox;
+        private Map<String, String> displayToRealMap;
+        private Map<String, String> realToDisplayMap;
+        
+        public ComboBoxCellEditor(List<String> displayOptions) {
+            super(new JComboBox<>(displayOptions.toArray(new String[0])));
+            comboBox = (JComboBox<String>) getComponent();
+            displayToRealMap = new java.util.HashMap<>();
+            realToDisplayMap = new java.util.HashMap<>();
+            for (String option : displayOptions) {
+                String realValue = extractRealValue(option);
+                displayToRealMap.put(option, realValue);
+                realToDisplayMap.put(realValue, option);
+            }
+        }
+        
+        private String extractRealValue(String displayText) {
+            if (displayText.contains(" (")) {
+                return displayText.substring(0, displayText.indexOf(" ("));
+            }
+            return displayText;
+        }
+        
+        @Override
+        public Component getTableCellEditorComponent(JTable table, Object value, boolean isSelected, int row, int column) {
+            comboBox = (JComboBox<String>) getComponent();
+            if (value != null) {
+                String displayText = realToDisplayMap.get(value.toString());
+                if (displayText != null) {
+                    comboBox.setSelectedItem(displayText);
+                } else if (displayToRealMap.containsKey(value.toString())) {
+                    comboBox.setSelectedItem(value.toString());
+                }
+            }
+            return getComponent();
+        }
+        
+        @Override
+        public Object getCellEditorValue() {
+            String selectedDisplay = (String) comboBox.getSelectedItem();
+            if (selectedDisplay != null) {
+                if (selectedDisplay.equals("自定义")) {
+                    String customIp = (String) JOptionPane.showInputDialog(
+                        comboBox,
+                        "请输入自定义IP地址:",
+                        "自定义服务器IP",
+                        JOptionPane.PLAIN_MESSAGE,
+                        null,
+                        null,
+                        ""
+                    );
+                    if (customIp != null && !customIp.trim().isEmpty()) {
+                        return customIp.trim();
+                    }
+                    return "";
+                }
+                String realValue = displayToRealMap.get(selectedDisplay);
+                if (realValue != null) {
+                    return realValue;
+                }
+            }
+            return comboBox.getSelectedItem();
         }
     }
     private void loadConfigToTable() {
         tableModel.setRowCount(0); 
         originalKeysMap.clear(); 
         Map<String, Object> configData = configManager.getConfigData();
+        
+        java.util.List<String> priorityKeys = new ArrayList<>();
+        priorityKeys.add("server-ip");
+        priorityKeys.add("server-port");
+        priorityKeys.add("motd");
+        priorityKeys.add("max-players");
+        priorityKeys.add("online-mode");
+        priorityKeys.add("white-list");
+        priorityKeys.add("enforce-whitelist");
+        priorityKeys.add("pvp");
+        priorityKeys.add("gamemode");
+        priorityKeys.add("difficulty");
+        priorityKeys.add("hardcore");
+        priorityKeys.add("force-gamemode");
+        priorityKeys.add("allow-flight");
+        priorityKeys.add("level-name");
+        priorityKeys.add("level-seed");
+        priorityKeys.add("level-type");
+        priorityKeys.add("spawn-protection");
+        priorityKeys.add("spawn-npcs");
+        priorityKeys.add("spawn-animals");
+        priorityKeys.add("spawn-monsters");
+        priorityKeys.add("allow-nether");
+        priorityKeys.add("view-distance");
+        priorityKeys.add("simulation-distance");
+        priorityKeys.add("generate-structures");
+        priorityKeys.add("max-build-height");
+        priorityKeys.add("max-world-size");
+        priorityKeys.add("enable-query");
+        priorityKeys.add("enable-status");
+        priorityKeys.add("enable-rcon");
+        priorityKeys.add("rcon.port");
+        priorityKeys.add("rcon.password");
+        priorityKeys.add("resource-pack");
+        priorityKeys.add("player-idle-timeout");
+        priorityKeys.add("broadcast-console-to-ops");
+        priorityKeys.add("broadcast-rcon-to-ops");
+        priorityKeys.add("hide-online-players");
+        priorityKeys.add("log-ips");
+        priorityKeys.add("prevent-proxy-connections");
+        priorityKeys.add("rate-limit");
+        priorityKeys.add("use-native-transport");
+        priorityKeys.add("network-compression-threshold");
+        priorityKeys.add("sync-chunk-writes");
+        priorityKeys.add("region-file-compression");
+        priorityKeys.add("entity-broadcast-range-percentage");
+        priorityKeys.add("pause-when-empty-seconds");
+        priorityKeys.add("max-tick-time");
+        priorityKeys.add("max-chained-neighbor-updates");
+        priorityKeys.add("use-vanilla-world-seed");
+        priorityKeys.add("generator-settings");
+        priorityKeys.add("enable-command-block");
+        priorityKeys.add("bug-report-link");
+        priorityKeys.add("enforce-secure-profile");
+        priorityKeys.add("enable-code-of-conduct");
+        priorityKeys.add("text-filtering-version");
+        priorityKeys.add("text-filtering-config");
+        priorityKeys.add("accepts-transfers");
+        priorityKeys.add("resource-pack-sha1");
+        priorityKeys.add("resource-pack-prompt");
+        priorityKeys.add("resource-pack-id");
+        priorityKeys.add("initial-enabled-packs");
+        priorityKeys.add("initial-disabled-packs");
+        priorityKeys.add("function-permission-level");
+        priorityKeys.add("op-permission-level");
+        priorityKeys.add("enable-jmx-monitoring");
+        priorityKeys.add("management-server-enabled");
+        priorityKeys.add("management-server-host");
+        priorityKeys.add("management-server-port");
+        priorityKeys.add("management-server-secret");
+        priorityKeys.add("management-server-tls-enabled");
+        priorityKeys.add("management-server-tls-keystore");
+        priorityKeys.add("management-server-tls-keystore-password");
+        priorityKeys.add("status-heartbeat-interval");
+        priorityKeys.add("require-resource-pack");
+        
         Set<Map.Entry<String, Object>> entries = configData.entrySet();
-        for (Map.Entry<String, Object> entry : entries) {
+        List<Map.Entry<String, Object>> sortedEntries = new ArrayList<>(entries);
+        sortedEntries.sort((a, b) -> {
+            int priorityA = priorityKeys.indexOf(a.getKey());
+            int priorityB = priorityKeys.indexOf(b.getKey());
+            if (priorityA >= 0 && priorityB >= 0) {
+                return Integer.compare(priorityA, priorityB);
+            } else if (priorityA >= 0) {
+                return -1;
+            } else if (priorityB >= 0) {
+                return 1;
+            }
+            return a.getKey().compareTo(b.getKey());
+        });
+        
+        for (Map.Entry<String, Object> entry : sortedEntries) {
             String originalKey = entry.getKey();
             String displayKey = originalKey;
             if (selectedConfigFile.getName().equals("server.properties") && propertiesChineseMap.containsKey(originalKey)) {

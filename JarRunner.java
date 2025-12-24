@@ -51,8 +51,8 @@ public class JarRunner {
                     if (lastRestartTimestamp > 0 && now - lastRestartTimestamp >= 3600000) {
                         int oldValue = currentHourlyAttempts.getAndSet(0);
                         if (oldValue > 0) {
-                            Logger.info("已重置每小时重启计数器", "JarRunner");
-                            outputPanel.append("[MSH] 已重置每小时重启计数器\n");
+                            Logger.info("Hourly restart counter has been reset", "JarRunner");
+                            outputPanel.append("[MSH] Hourly restart counter has been reset\n");
                         }
                     }
                 } catch (InterruptedException e) {
@@ -160,11 +160,11 @@ public class JarRunner {
             return;
         }
         
-        Logger.warn("检测到服务器进程终止: " + jarPath, "JarRunner");
-        outputPanel.append("[MSH] 检测到服务器进程终止\n");
+        Logger.warn("Detected server process terminated: " + jarPath, "JarRunner");
+        outputPanel.append("[MSH] Detected server process terminated\n");
         if (isNormalStop) {
-            Logger.info("服务器正常停止，不进行自动重启: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] 服务器正常停止，不进行自动重启\n");
+            Logger.info("Server normal shutdown, skipping auto-restart: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] Server normal shutdown, skipping auto-restart\n");
             status = Status.STOPPED;
             cleanupProcess();
             return;
@@ -175,10 +175,10 @@ public class JarRunner {
         if (autoRestartEnabled && currentHourlyAttempts.get() < maxHourlyAttempts) {
             int attempts = currentHourlyAttempts.incrementAndGet();
             lastRestartTimestamp = System.currentTimeMillis();
-            Logger.warn(String.format("检测到服务器异常终止，将在 %d 秒后尝试自动重启 (本小时第 %d/%d 次尝试)", 
+            Logger.warn(String.format("Server abnormal termination detected, auto-restart in %d seconds (attempt %d/%d this hour)", 
                 restartInterval, attempts, maxHourlyAttempts), "JarRunner");
             Logger.warn("WARN: Server process terminated unexpectedly - initiating auto-restart sequence", "JarRunner");
-            outputPanel.append(String.format("[MSH] 检测到服务器异常终止，将在 %d 秒后尝试自动重启 (本小时第 %d/%d 次尝试)", 
+            outputPanel.append(String.format("[MSH] Server abnormal termination detected, auto-restart in %d seconds (attempt %d/%d this hour)", 
                 restartInterval, attempts, maxHourlyAttempts) + "\n");
             
             Thread restartThread = new Thread(() -> {
@@ -186,8 +186,8 @@ public class JarRunner {
                     Thread.sleep(restartInterval * 1000);
                     checkAndResetHourlyCounter();
                     if (status == Status.STOPPED && autoRestartEnabled && currentHourlyAttempts.get() <= maxHourlyAttempts) {
-                        Logger.info(String.format("正在执行第 %d 次自动重启", attempts), "JarRunner");
-                        outputPanel.append(String.format("[MSH] 正在执行第 %d 次自动重启...", attempts) + "\n");
+                        Logger.info(String.format("Executing auto-restart attempt %d", attempts), "JarRunner");
+                        outputPanel.append(String.format("[MSH] Executing auto-restart attempt %d...", attempts) + "\n");
                         JarRunner.this.start();
                     }
                 } catch (InterruptedException e) {
@@ -197,16 +197,16 @@ public class JarRunner {
             restartThread.setDaemon(true);
             restartThread.start();
         } else if (currentHourlyAttempts.get() >= maxHourlyAttempts) {
-            Logger.error("本小时内自动重启已达到最大尝试次数，停止重启尝试: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] 本小时内自动重启已达到最大尝试次数，停止重启尝试\n");
+            Logger.error("Auto-restart attempts exhausted for this hour, stopping restart attempts: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] Auto-restart attempts exhausted for this hour, stopping restart attempts\n");
         }
     }
     public void start() {
         if (status == Status.RUNNING || status == Status.STARTING) {
-            Logger.warn("服务器已在运行或启动中，跳过启动请求: " + jarPath, "JarRunner");
+            Logger.warn("Server already running or starting, skipping start request: " + jarPath, "JarRunner");
             return;
         }
-        Logger.info("开始启动服务器: " + jarPath, "JarRunner");
+        Logger.info("Initiating server startup: " + jarPath, "JarRunner");
         currentHourlyAttempts.set(0);
         lastRestartTimestamp = 0;
         isTerminated = false;
@@ -217,7 +217,7 @@ public class JarRunner {
         } catch (IOException e) {
             status = Status.STOPPED;
             Logger.error("Server startup failed: " + e.getMessage(), "JarRunner");
-            outputPanel.append("[MSH] 服务器启动失败: " + e.getMessage() + "\n");
+            outputPanel.append("[MSH] Server startup failed: " + e.getMessage() + "\n");
         }
     }
     private void startServer() throws IOException {
@@ -275,7 +275,8 @@ public class JarRunner {
         processMonitorThread = new Thread(() -> {
             try {
                 int exitCode = process.waitFor();
-                outputPanel.append("[MSH] 服务器进程已终止，退出码: " + exitCode + "\n");
+                Logger.info("Server process terminated with exit code: " + exitCode, "JarRunner");
+                outputPanel.append("[MSH] Server process terminated, exit code: " + exitCode + "\n");
                 onProcessTerminated();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -316,10 +317,11 @@ public class JarRunner {
             Thread.sleep(1000);
             if (!process.isAlive()) {
                 status = Status.STOPPED;
-                Logger.error("服务器启动失败: 进程未能成功启动", "JarRunner");
-                outputPanel.append("[MSH] 服务器启动失败: 进程未能成功启动\n");
+                Logger.error("Server startup failed: process failed to start successfully", "JarRunner");
+                outputPanel.append("[MSH] Server startup failed: process failed to start\n");
                 return;
             }
+            Logger.info("Server process started successfully, PID: " + process.pid(), "JarRunner");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -328,8 +330,8 @@ public class JarRunner {
     public void onServerFullyStarted() {
         if (status == Status.STARTING) {
             status = Status.RUNNING;
-            Logger.info("服务器启动成功: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] 服务器启动成功: " + jarPath + "\n");
+            Logger.info("Server startup completed successfully: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] Server startup completed: " + jarPath + "\n");
         }
     }
     
@@ -337,32 +339,32 @@ public class JarRunner {
         if (status == Status.RUNNING) {
             status = Status.STOPPING;
             isNormalStop = true;
-            Logger.info("服务器正在停止: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] 服务器正在停止...\n");
+            Logger.info("Server is stopping: " + jarPath, "JarRunner");
+            outputPanel.append("[MSH] Server is stopping...\n");
         }
     }
     public void stop() {
         if (status == Status.STOPPED || status == Status.STOPPING) {
-            Logger.warn("服务器已停止或正在停止，跳过停止请求: " + jarPath, "JarRunner");
+            Logger.warn("Server already stopped or stopping, skipping stop request: " + jarPath, "JarRunner");
             return;
         }
-        Logger.info("停止服务器: " + jarPath, "JarRunner");
+        Logger.info("Stopping server: " + jarPath, "JarRunner");
         status = Status.STOPPING;
         isNormalStop = true;
         isTerminated = false;
         if (commandWriter != null) {
             commandWriter.println("stop");
             commandWriter.flush();
-            outputPanel.append("[命令] stop\n");
+            outputPanel.append("[Command] stop\n");
         }
     }
     
     public void forceStop() {
         if (status == Status.STOPPED || status == Status.STOPPING) {
-            Logger.warn("服务器已停止或正在停止，跳过强制停止请求: " + jarPath, "JarRunner");
+            Logger.warn("Server already stopped or stopping, skipping force stop request: " + jarPath, "JarRunner");
             return;
         }
-        Logger.warn("强制停止服务器: " + jarPath, "JarRunner");
+        Logger.warn("Force stopping server: " + jarPath, "JarRunner");
         isNormalStop = false;
         isTerminated = false;
         if (process != null) {
@@ -414,7 +416,8 @@ public class JarRunner {
         process = null;
         if (status != Status.STOPPED) {
             status = Status.STOPPED;
-            outputPanel.append("[MSH] 服务器已停止: " + jarPath + "\n");
+            Logger.info("Server cleanup completed", "JarRunner");
+            outputPanel.append("[MSH] Server stopped: " + jarPath + "\n");
         }
     }
     
@@ -422,10 +425,10 @@ public class JarRunner {
     
     public void sendCommand(String command) {
         if ((status == Status.RUNNING || status == Status.STOPPING) && commandWriter != null) {
-            Logger.debug("发送服务器命令: " + command, "JarRunner");
+            Logger.debug("Sending server command: " + command, "JarRunner");
             commandWriter.println(command);
             commandWriter.flush();
-            outputPanel.append("[命令] " + command + "\n");
+            outputPanel.append("[Command] " + command + "\n");
             String cmdLower = command.toLowerCase().trim();
             if (cmdLower.equals("stop") || cmdLower.equals("/stop")) {
                 isNormalStop = true;
@@ -433,21 +436,21 @@ public class JarRunner {
                 status = Status.STOPPING;
             }
         } else {
-            Logger.warn("服务器未运行，无法发送命令: " + command, "JarRunner");
+            Logger.warn("Server not running, cannot send command: " + command, "JarRunner");
         }
     }
     public void restart() {
         if (status == Status.STARTING || status == Status.STOPPING) {
-            Logger.warn("服务器正在启动或停止，跳过重启请求: " + jarPath, "JarRunner");
+            Logger.warn("Server is starting or stopping, skipping restart request: " + jarPath, "JarRunner");
             return;
         }
-        Logger.info("重启服务器: " + jarPath, "JarRunner");
-        outputPanel.append("[MSH] 正在重启服务器: " + jarPath + "\n");
+        Logger.info("Restarting server: " + jarPath, "JarRunner");
+        outputPanel.append("[MSH] Restarting server: " + jarPath + "\n");
         stop();
         try {
             Thread.sleep(2000);
         } catch (InterruptedException e) {
-            Logger.error("重启服务器时发生中断: " + e.getMessage(), "JarRunner");
+            Logger.error("Restart interrupted: " + e.getMessage(), "JarRunner");
             Thread.currentThread().interrupt();
         }
         start();

@@ -132,6 +132,7 @@ public class AddressDialog {
         NetworkUtils.getPublicIP().thenAccept(publicIP -> {
             SwingUtilities.invokeLater(() -> {
                 boolean hasPublicIP = !publicIP.contains("失败") && !publicIP.contains("无法获取") && !publicIP.equals("获取失败");
+                boolean isPublicConfigured = isPublicAccessConfigured();
                 
                 if (hasPublicIP) {
                     JPanel publicAddressHiddenPanel = new JPanel(new BorderLayout(8, 3));
@@ -145,24 +146,61 @@ public class AddressDialog {
                     publicTypeLabel.setFont(new Font(null, Font.BOLD, 12));
                     publicTypeLabel.setForeground(new Color(178, 34, 34));
                     
-                    JLabel publicAddressLabel = new JLabel("点击下方按钮并同意免责声明后显示");
-                    publicAddressLabel.setFont(new Font(null, Font.ITALIC, 10));
-                    publicAddressLabel.setForeground(new Color(139, 69, 19));
+                    JLabel publicAddressLabel;
+                    JButton showPublicButton;
+                    JButton forceShowButton = null;
                     
-                    JButton showPublicButton = new JButton("显示公网地址（需同意免责声明）");
-                    showPublicButton.setBackground(new Color(220, 20, 60));
-                    showPublicButton.setForeground(Color.WHITE);
-                    showPublicButton.setFont(new Font(null, Font.BOLD, 10));
-                    
-                    showPublicButton.addActionListener(e -> {
-                        showDisclaimerDialog(publicIP, actualPort);
-                    });
+                    if (isPublicConfigured) {
+                        publicAddressLabel = new JLabel("点击下方按钮并同意免责声明后显示");
+                        publicAddressLabel.setFont(new Font(null, Font.ITALIC, 10));
+                        publicAddressLabel.setForeground(new Color(139, 69, 19));
+                        
+                        showPublicButton = new JButton("显示公网地址（需同意免责声明）");
+                        showPublicButton.setBackground(new Color(220, 20, 60));
+                        showPublicButton.setForeground(Color.WHITE);
+                        showPublicButton.setFont(new Font(null, Font.BOLD, 10));
+                        
+                        showPublicButton.addActionListener(e -> {
+                            showDisclaimerDialog(publicIP, actualPort);
+                        });
+                    } else {
+                        publicAddressLabel = new JLabel("⚠️ 未配置公网访问，网络上的玩家可能无法连接");
+                        publicAddressLabel.setFont(new Font(null, Font.BOLD, 10));
+                        publicAddressLabel.setForeground(new Color(200, 0, 0));
+                        
+                        showPublicButton = new JButton("一键配置公网访问");
+                        showPublicButton.setBackground(new Color(255, 140, 0));
+                        showPublicButton.setForeground(Color.WHITE);
+                        showPublicButton.setFont(new Font(null, Font.BOLD, 10));
+                        
+                        showPublicButton.addActionListener(e -> {
+                            boolean confirmed = showConfigWarningDialog();
+                            if (confirmed) {
+                                configurePublicAccess();
+                            }
+                        });
+                        
+                        forceShowButton = new JButton("强制显示");
+                        forceShowButton.setBackground(new Color(128, 0, 128));
+                        forceShowButton.setForeground(Color.WHITE);
+                        forceShowButton.setFont(new Font(null, Font.BOLD, 10));
+                        
+                        forceShowButton.addActionListener(e -> {
+                            showForceShowDialog(publicIP, actualPort);
+                        });
+                    }
                     
                     publicInfoPanel.add(publicTypeLabel);
                     publicInfoPanel.add(publicAddressLabel);
                     
                     publicAddressHiddenPanel.add(publicInfoPanel, BorderLayout.CENTER);
-                    publicAddressHiddenPanel.add(showPublicButton, BorderLayout.EAST);
+                    
+                    JPanel buttonContainer = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 0));
+                    buttonContainer.add(showPublicButton);
+                    if (forceShowButton != null) {
+                        buttonContainer.add(forceShowButton);
+                    }
+                    publicAddressHiddenPanel.add(buttonContainer, BorderLayout.EAST);
                     
                     publicAddressHiddenPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
                     addressPanel.add(publicAddressHiddenPanel);
@@ -268,6 +306,161 @@ public class AddressDialog {
         }
         
         return 25565;
+    }
+    
+    private boolean isPublicAccessConfigured() {
+        if (jarRunner == null) {
+            return false;
+        }
+        
+        try {
+            File jarFile = new File(jarRunner.getJarPath());
+            File serverDir = jarFile.getParentFile();
+            if (serverDir == null) {
+                return false;
+            }
+            
+            File serverProperties = new File(serverDir, "server.properties");
+            if (serverProperties.exists()) {
+                Properties props = new Properties();
+                try (FileInputStream fis = new FileInputStream(serverProperties)) {
+                    props.load(fis);
+                    String serverIp = props.getProperty("server-ip", "");
+                    return serverIp.isEmpty() || serverIp.equals("0.0.0.0");
+                }
+            }
+        } catch (Exception e) {
+            Logger.warn("Failed to read server-ip from server.properties: " + e.getMessage(), "AddressDialog");
+        }
+        
+        return false;
+    }
+    
+    private boolean showConfigWarningDialog() {
+        JDialog warningDialog = new JDialog(dialog, "配置警告", true);
+        warningDialog.setLayout(new BorderLayout(10, 10));
+        warningDialog.setSize(450, 350);
+        warningDialog.setLocationRelativeTo(dialog);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(8, 8));
+        mainPanel.setBorder(new EmptyBorder(12, 12, 12, 12));
+        
+        JPanel warningPanel = new JPanel(new BorderLayout());
+        JLabel warningTitle = new JLabel("⚠️ 配置公网访问警告");
+        warningTitle.setFont(new Font(null, Font.BOLD, 14));
+        warningTitle.setForeground(new Color(200, 100, 0));
+        warningTitle.setHorizontalAlignment(SwingConstants.CENTER);
+        warningPanel.add(warningTitle, BorderLayout.NORTH);
+        
+        JTextArea warningText = new JTextArea();
+        warningText.setEditable(false);
+        warningText.setWrapStyleWord(true);
+        warningText.setLineWrap(true);
+        warningText.setBackground(new Color(255, 250, 240));
+        warningText.setForeground(new Color(139, 69, 19));
+        warningText.setFont(new Font(null, Font.PLAIN, 11));
+        
+        String text = "即将配置服务器接受公网连接：\n\n" +
+            "⚠️  安全风险：\n" +
+            "   服务器将暴露在互联网上，任何人都可能访问\n" +
+            "   可能遭受黑客攻击或恶意入侵\n" +
+            "   你的个人电脑面临安全威胁\n\n" +
+            "⚠️  必要措施：\n" +
+            "   确保路由器已设置端口映射\n" +
+            "   确保防火墙已放行端口\n" +
+            "   修改服务器管理员密码为强密码\n" +
+            "   考虑安装安全插件（如AuthMe）\n\n" +
+            "是否继续配置？";
+        
+        warningText.setText(text);
+        
+        JScrollPane scrollPane = new JScrollPane(warningText);
+        warningPanel.add(scrollPane, BorderLayout.CENTER);
+        
+        JCheckBox confirmCheckBox = new JCheckBox("我已了解风险并确认配置");
+        confirmCheckBox.setFont(new Font(null, Font.PLAIN, 11));
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout());
+        JButton confirmButton = new JButton("确认配置");
+        JButton cancelButton = new JButton("取消");
+        
+        boolean[] confirmed = {false};
+        
+        confirmButton.setEnabled(false);
+        confirmButton.setBackground(new Color(255, 140, 0));
+        confirmButton.setForeground(Color.WHITE);
+        
+        confirmCheckBox.addActionListener(e -> {
+            confirmButton.setEnabled(confirmCheckBox.isSelected());
+        });
+        
+        confirmButton.addActionListener(e -> {
+            confirmed[0] = true;
+            warningDialog.dispose();
+        });
+        cancelButton.addActionListener(e -> warningDialog.dispose());
+        
+        buttonPanel.add(confirmButton);
+        buttonPanel.add(cancelButton);
+        
+        mainPanel.add(warningPanel, BorderLayout.CENTER);
+        mainPanel.add(confirmCheckBox, BorderLayout.BEFORE_FIRST_LINE);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        warningDialog.add(mainPanel);
+        warningDialog.setVisible(true);
+        
+        return confirmed[0];
+    }
+    
+    private void configurePublicAccess() {
+        if (jarRunner == null) {
+            JOptionPane.showMessageDialog(dialog, "无法配置：无法获取服务器路径", "错误", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        try {
+            File jarFile = new File(jarRunner.getJarPath());
+            File serverDir = jarFile.getParentFile();
+            if (serverDir == null) {
+                JOptionPane.showMessageDialog(dialog, "无法配置：无法确定服务器目录", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            File serverProperties = new File(serverDir, "server.properties");
+            if (!serverProperties.exists()) {
+                JOptionPane.showMessageDialog(dialog, "无法配置：server.properties 文件不存在", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            Properties props = new Properties();
+            try (FileInputStream fis = new FileInputStream(serverProperties)) {
+                props.load(fis);
+            }
+            
+            props.setProperty("server-ip", "0.0.0.0");
+            
+            try (FileOutputStream fos = new FileOutputStream(serverProperties)) {
+                props.store(fos, "Minecraft Server Properties");
+            }
+            
+            Logger.info("Public access configured: server-ip cleared (defaults to 0.0.0.0)", "AddressDialog");
+            
+            JOptionPane.showMessageDialog(dialog, 
+                "✅ 配置成功！\n\n服务器IP已设为0.0.0.0，现在可以接受公网连接。\n\n请确保：\n1. 路由器已设置端口映射\n2. 防火墙已放行端口\n\n点击刷新按钮更新地址信息。", 
+                "配置成功", JOptionPane.INFORMATION_MESSAGE);
+            
+            addressPanel.removeAll();
+            statusLabel.setText("正在获取地址信息...");
+            dialog.revalidate();
+            dialog.repaint();
+            resetScrollPosition();
+            loadNetworkAddresses();
+            
+        } catch (Exception e) {
+            Logger.error("Failed to configure public access: " + e.getMessage(), "AddressDialog");
+            JOptionPane.showMessageDialog(dialog, "配置失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+        }
     }
     
     public void show() {
@@ -434,5 +627,98 @@ public class AddressDialog {
         
         disclaimerDialog.add(mainPanel);
         disclaimerDialog.setVisible(true);
+    }
+    
+    private void showForceShowDialog(String publicIP, int port) {
+        JDialog forceDialog = new JDialog(dialog, "强制显示公网地址 - 安全协议", true);
+        forceDialog.setLayout(new BorderLayout(10, 10));
+        forceDialog.setSize(550, 420);
+        forceDialog.setLocationRelativeTo(dialog);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(8, 8));
+        mainPanel.setBorder(new EmptyBorder(12, 12, 12, 12));
+        
+        JPanel headerPanel = new JPanel(new BorderLayout());
+        JLabel headerLabel = new JLabel("⚠️ 强制显示协议");
+        headerLabel.setFont(new Font(null, Font.BOLD, 14));
+        headerLabel.setForeground(new Color(128, 0, 128));
+        headerLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        headerPanel.add(headerLabel, BorderLayout.CENTER);
+        mainPanel.add(headerPanel, BorderLayout.NORTH);
+        
+        JTextArea protocolText = new JTextArea();
+        protocolText.setEditable(false);
+        protocolText.setWrapStyleWord(true);
+        protocolText.setLineWrap(true);
+        protocolText.setBackground(new Color(250, 240, 255));
+        protocolText.setForeground(new Color(75, 0, 130));
+        protocolText.setFont(new Font(null, Font.PLAIN, 11));
+        
+        String protocolContent = 
+            "强制显示公网地址功能使用须知\n\n" +
+            "本功能允许你在未配置公网访问的情况下强行获取并显示公网IP地址。\n\n" +
+            "━━━━━━━━━━━━━━ 风险声明 ━━━━━━━━━━━━━━\n\n" +
+            "1. 强制显示不代表公网可访问\n" +
+            "   即使显示公网IP，外部玩家也可能无法连接\n" +
+            "   需要在路由器设置端口映射才能真正实现外网连接\n\n" +
+            "2. 安全风险仍然存在\n" +
+            "   公网IP暴露后，服务器可能被扫描和攻击\n" +
+            "   建议立即配置必要的安全防护措施\n\n" +
+            "3. 本功能不承担任何责任\n" +
+            "   使用本功能产生的任何损失由用户自行承担\n\n" +
+            "━━━━━━━━━━━━━━ 用户承诺 ━━━━━━━━━━━━━━\n\n" +
+            "□ 我已了解强制显示公网地址的用途和限制\n" +
+            "□ 我愿意承担公网IP暴露可能带来的安全风险\n" +
+            "□ 我会尽快配置必要的安全防护措施\n" +
+            "□ 我不会将公网地址分享给不信任的人\n\n" +
+            "━━━━━━━━━━━━━━ 使用说明 ━━━━━━━━━━━━━━\n\n" +
+            "• 点击\"同意并显示\"将继续显示公网地址\n" +
+            "• 点击\"取消\"将关闭此对话框\n" +
+            "• 如需真正实现外网连接，请使用\"一键配置公网访问\"功能";
+        
+        protocolText.setText(protocolContent);
+        
+        JScrollPane scrollPane = new JScrollPane(protocolText);
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        
+        mainPanel.add(scrollPane, BorderLayout.CENTER);
+        
+        JPanel bottomPanel = new JPanel(new BorderLayout(8, 8));
+        
+        JCheckBox agreeCheckBox = new JCheckBox("我已阅读并理解以上所有条款，自愿使用强制显示功能");
+        agreeCheckBox.setFont(new Font(null, Font.PLAIN, 10));
+        agreeCheckBox.setForeground(new Color(128, 0, 128));
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout());
+        JButton agreeButton = new JButton("同意并显示");
+        JButton cancelButton = new JButton("取消");
+        
+        agreeButton.setEnabled(false);
+        agreeButton.setBackground(new Color(128, 0, 128));
+        agreeButton.setForeground(Color.WHITE);
+        
+        cancelButton.setBackground(Color.LIGHT_GRAY);
+        
+        agreeCheckBox.addActionListener(e -> {
+            agreeButton.setEnabled(agreeCheckBox.isSelected());
+        });
+        
+        agreeButton.addActionListener(e -> {
+            forceDialog.dispose();
+            showDisclaimerDialog(publicIP, port);
+        });
+        
+        cancelButton.addActionListener(e -> forceDialog.dispose());
+        
+        buttonPanel.add(agreeButton);
+        buttonPanel.add(cancelButton);
+        
+        bottomPanel.add(agreeCheckBox, BorderLayout.NORTH);
+        bottomPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        mainPanel.add(bottomPanel, BorderLayout.SOUTH);
+        
+        forceDialog.add(mainPanel);
+        forceDialog.setVisible(true);
     }
 }

@@ -20,10 +20,10 @@ public class Logger {
     private int maxLogEntries;
     
     public enum LogLevel {
-        INFO("[信息]", "#00FF00"),
-        WARN("[警告]", "#FFFF00"),
-        ERROR("[错误]", "#FF0000"),
-        DEBUG("[调试]", "#00FFFF");
+        INFO("[INFO]", "#00FF00"),
+        WARN("[WARN]", "#FFFF00"),
+        ERROR("[ERROR]", "#FF0000"),
+        DEBUG("[DEBUG]", "#00FFFF");
         
         private final String prefix;
         private final String color;

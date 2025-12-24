@@ -184,7 +184,7 @@ public class Main {
     }
     private void createAndShowGUI() {
         instance = this;
-        Logger.info("程序启动", "Main");
+        Logger.info("Application started", "Main");
         config = new Properties();
         File mshDir = new File("MSH");
         if (!mshDir.exists()) {
@@ -192,7 +192,7 @@ public class Main {
         }
         configFile = new File(mshDir, "server_manager_config.properties");
         loadConfig();
-        Logger.info("配置文件加载完成", "Main");
+        Logger.info("Configuration loaded successfully", "Main");
         frame = new JFrame(APP_NAME + " (" + APP_SHORT_NAME + ")");
         frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         frame.addWindowListener(new WindowAdapter() {
@@ -246,9 +246,9 @@ public class Main {
             JOptionPane.showMessageDialog(frame, 
                 APP_NAME + " (" + APP_SHORT_NAME + ")\n\n" +
                 "版本: " + VERSION + "\n" +
-                "作者: " + AUTHOR + "\n\n" +
+                "作者: " + AUTHOR + "\n" +
                 "官网: https://msh.znpwlk.vip/\n" +
-                "GitHub: https://github.com/znpwlk/Minecraft-Server-Hub\n\n" +
+                "GitHub: https://github.com/znpwlk/Minecraft-Server-Hub\n" +
                 "功能: 管理Minecraft服务器", 
                 "关于", JOptionPane.INFORMATION_MESSAGE);
         });
@@ -283,7 +283,7 @@ public class Main {
         logScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         
         Logger.getInstance().setLogTextArea(logTextArea);
-        Logger.info("日志系统初始化完成", "Main");
+        Logger.info("Logging system initialized", "Main");
         
         JPanel logPanel = new JPanel(new BorderLayout());
         JPanel logButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -316,14 +316,14 @@ public class Main {
             config.setProperty("last_server_path", "");
             saveConfig();
         } catch (IOException e) {
-            Logger.error("配置文件加载失败: " + e.getMessage(), "Main");
+            Logger.error("Failed to load configuration file: " + e.getMessage(), "Main");
         }
     }
     private void saveConfig() {
         try (OutputStream output = new FileOutputStream(configFile)) {
             config.store(output, APP_NAME + " Configuration");
         } catch (IOException e) {
-            Logger.error("配置文件保存失败: " + e.getMessage(), "Main");
+            Logger.error("Failed to save configuration file: " + e.getMessage(), "Main");
         }
     }
 
@@ -490,28 +490,40 @@ public class Main {
     }
     
     private void handleWindowClosing() {
-        Logger.info("程序开始关闭流程", "Main");
-        jarRunners.forEach(JarRunner::stop);
-        Logger.info("已发送停止信号给所有服务器", "Main");
+        Logger.info("Application shutdown initiated", "Main");
+        Logger.info("Stop signal sent to all servers", "Main");
         try {
-            Thread.sleep(1000);
+            for (JarRunner jarRunner : jarRunners) {
+                if (jarRunner.getStatus() == JarRunner.Status.RUNNING || jarRunner.getStatus() == JarRunner.Status.STARTING) {
+                    jarRunner.stop();
+                }
+            }
+            int waitCount = 0;
+            boolean allStopped = false;
+            while (waitCount < 30) {
+                allStopped = true;
+                for (JarRunner jarRunner : jarRunners) {
+                    if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                        allStopped = false;
+                        break;
+                    }
+                }
+                if (allStopped) break;
+                Thread.sleep(1000);
+                waitCount++;
+            }
         } catch (InterruptedException e) {
-            Logger.error("关闭过程中发生中断: " + e.getMessage(), "Main");
+            Logger.error("Shutdown interrupted: " + e.getMessage(), "Main");
             Thread.currentThread().interrupt();
         }
-        boolean hasRunningServer = jarRunners.stream()
-            .anyMatch(runner -> runner.getStatus() != JarRunner.Status.STOPPED);
-        if (hasRunningServer) {
-            Logger.warn("部分服务器无法正常关闭", "Main");
-            JOptionPane.showMessageDialog(
-                frame,
-                "部分服务器无法正常关闭，可能需要手动关闭进程。",
-                "关闭警告",
-                JOptionPane.WARNING_MESSAGE
-            );
+        if (!jarRunners.isEmpty()) {
+            boolean hasRunning = jarRunners.stream().anyMatch(r -> r.getStatus() != JarRunner.Status.STOPPED);
+            if (hasRunning) {
+                Logger.warn("Some servers failed to shutdown gracefully", "Main");
+            }
         }
-        Logger.info("程序退出", "Main");
-        System.exit(0);
+        Logger.info("Application exiting", "Main");
+        Runtime.getRuntime().exit(0);
     }
 
     private void showTabContextMenu(int tabIndex, int x, int y) {
@@ -643,7 +655,7 @@ public class Main {
         tabbedPane.removeTabAt(tabIndex);
     }
     private void addServer(ActionEvent e) {
-        Logger.info("用户点击添加服务器按钮", "Main");
+        Logger.info("User clicked add server button", "Main");
         try {
             String selfPath = Main.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath();
             File selfFile = new File(selfPath);
@@ -672,7 +684,7 @@ public class Main {
             if (returnValue == JFileChooser.APPROVE_OPTION) {
                 File selectedFile = fileChooser.getSelectedFile();
                 String jarPath = selectedFile.getAbsolutePath();
-                Logger.info("用户选择服务器文件: " + jarPath, "Main");
+                Logger.info("User selected server file: " + jarPath, "Main");
 
                 for (JarRunner existingRunner : jarRunners) {
                     if (existingRunner.getJarPath().equals(jarPath)) {
@@ -684,13 +696,13 @@ public class Main {
                 
                 config.setProperty("last_server_path", jarPath);
                 saveConfig();
-                Logger.info("保存配置文件完成", "Main");
+                Logger.info("Configuration saved successfully", "Main");
                 addServerFromPath(jarPath);
             } else {
-                Logger.info("用户取消添加服务器", "Main");
+                Logger.info("User cancelled add server", "Main");
             }
         } catch (Exception ex) {
-            Logger.error("添加服务器时发生异常: " + ex.getMessage(), "Main");
+            Logger.error("Error adding server: " + ex.getMessage(), "Main");
         }
     }
     
