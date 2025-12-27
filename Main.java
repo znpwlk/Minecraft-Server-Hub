@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 public class Main {
-    private static final String VERSION = "1.0.5";
+    public static final String VERSION = "1.0.8";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -21,6 +21,7 @@ public class Main {
     private File configFile;
     private JTextArea logTextArea;
     private List<TabLabel> tabLabels = new ArrayList<>();
+    private UpdateManager updateManager;
     
     private static class TabLabel extends JPanel {
         private JLabel label;
@@ -122,6 +123,10 @@ public class Main {
         return null;
     }
     
+    public List<JarRunner> getJarRunners() {
+        return jarRunners;
+    }
+    
     public static void main(String[] args) {
         String osName = System.getProperty("os.name").toLowerCase();
         String charset = "UTF-8";
@@ -193,6 +198,7 @@ public class Main {
         configFile = new File(mshDir, "server_manager_config.properties");
         loadConfig();
         Logger.info("Configuration loaded successfully", "Main");
+        updateManager = new UpdateManager(this);
         frame = new JFrame(APP_NAME + " (" + APP_SHORT_NAME + ")");
         frame.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         frame.addWindowListener(new WindowAdapter() {
@@ -253,6 +259,10 @@ public class Main {
                 "关于", JOptionPane.INFORMATION_MESSAGE);
         });
         topPanel.add(aboutButton);
+        
+        JButton checkUpdateButton = new JButton("检查更新");
+        checkUpdateButton.addActionListener(e -> updateManager.checkForUpdates());
+        topPanel.add(checkUpdateButton);
         tabbedPane = new JTabbedPane();
         tabbedPane.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -286,12 +296,21 @@ public class Main {
         Logger.info("Logging system initialized", "Main");
         
         JPanel logPanel = new JPanel(new BorderLayout());
-        JPanel logButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel logButtonPanel = new JPanel(new BorderLayout());
+        JPanel leftButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton clearLogButton = new JButton("清空日志");
         clearLogButton.addActionListener(e -> {
             Logger.getInstance().clearLogDisplay();
         });
-        logButtonPanel.add(clearLogButton);
+        leftButtonPanel.add(clearLogButton);
+        logButtonPanel.add(leftButtonPanel, BorderLayout.WEST);
+        
+        JPanel rightButtonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton exportLogButton = new JButton("导出日志");
+        exportLogButton.addActionListener(e -> exportLogs());
+        rightButtonPanel.add(exportLogButton);
+        logButtonPanel.add(rightButtonPanel, BorderLayout.EAST);
+        
         logPanel.add(logButtonPanel, BorderLayout.NORTH);
         logPanel.add(logScrollPane, BorderLayout.CENTER);
         
@@ -308,7 +327,340 @@ public class Main {
             }
         }
         frame.setVisible(true);
+        updateManager.checkForUpdates(false);
     }
+    
+    private void exportLogs() {
+        String logContent = logTextArea.getText();
+        if (logContent == null || logContent.isEmpty()) {
+            JOptionPane.showMessageDialog(frame, "无日志内容可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        
+        String[] formats = {"TXT 文本文件 (*.txt)", "CSV 逗号分隔文件 (*.csv)", "HTML 网页文件 (*.html)"};
+        int formatChoice = JOptionPane.showOptionDialog(
+            frame,
+            "选择导出格式:",
+            "导出程序日志",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            formats,
+            formats[0]
+        );
+        
+        if (formatChoice < 0) {
+            return;
+        }
+        
+        String[] extensions = {".txt", ".csv", ".html"};
+        String prefix = "app_log_" + System.currentTimeMillis();
+        
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("保存日志文件");
+        fileChooser.setSelectedFile(new File(prefix + extensions[formatChoice]));
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+            formats[formatChoice].split(" \\*")[0],
+            extensions[formatChoice].substring(1)
+        ));
+        
+        int result = fileChooser.showSaveDialog(frame);
+        if (result != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        
+        File selectedFile = fileChooser.getSelectedFile();
+        String filePath = selectedFile.getAbsolutePath();
+        if (!filePath.toLowerCase().endsWith(extensions[formatChoice])) {
+            selectedFile = new File(filePath + extensions[formatChoice]);
+        }
+        
+        try {
+            String exportContent;
+            int logLineCount = logContent.split("\n").length;
+            String exportTime = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date());
+            String osInfo = System.getProperty("os.name") + " " + System.getProperty("os.version") + " (" + System.getProperty("os.arch") + ")";
+            String javaVersion = System.getProperty("java.version");
+            
+            if (formatChoice == 0) {
+                StringBuilder txt = new StringBuilder();
+                txt.append("================================================================================\n");
+                txt.append("                              APPLICATION LOG EXPORT\n");
+                txt.append("================================================================================\n\n");
+                txt.append("Application: ").append(APP_NAME).append(" (").append(APP_SHORT_NAME).append(")\n");
+                txt.append("Version: ").append(VERSION).append("\n");
+                txt.append("Export Time: ").append(exportTime).append("\n");
+                txt.append("Format: ").append(formats[formatChoice].split(" \\*")[0]).append("\n");
+                txt.append("Operating System: ").append(osInfo).append("\n");
+                txt.append("Java Version: ").append(javaVersion).append("\n");
+                txt.append("Total Lines: ").append(logLineCount).append("\n");
+                txt.append("Total Characters: ").append(logContent.length()).append("\n");
+                txt.append("\n--------------------------------------------------------------------------------\n");
+                txt.append("                               LOG CONTENT\n");
+                txt.append("--------------------------------------------------------------------------------\n\n");
+                txt.append(logContent);
+                txt.append("\n================================================================================\n");
+                txt.append("                           END OF LOG FILE\n");
+                txt.append("================================================================================\n");
+                exportContent = txt.toString();
+            } else if (formatChoice == 1) {
+                StringBuilder csv = new StringBuilder();
+                csv.append("\"Application\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(APP_NAME).append(" (").append(APP_SHORT_NAME).append(")\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Version\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(VERSION).append("\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Export Time\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(exportTime).append("\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Format\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(formats[formatChoice].split(" \\*")[0]).append("\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Operating System\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(osInfo).append("\",\"\",\"\",\"\"\n");
+                csv.append("\"Java Version\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(javaVersion).append("\",\"\",\"\"\n");
+                csv.append("\"Total Lines\",\"\",\"\"\n");
+                csv.append("\"").append(logLineCount).append("\",\"\"\n");
+                csv.append("\"Total Characters\",\"\"\n");
+                csv.append("\"").append(logContent.length()).append("\"\n");
+                csv.append("\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"LOG CONTENT\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                String[] lines = logContent.split("\n");
+                for (String line : lines) {
+                    if (line.contains(",") || line.contains("\"") || line.contains("\n")) {
+                        line = "\"" + line.replace("\"", "\"\"") + "\"";
+                    }
+                    csv.append("\"").append(line).append("\"\n");
+                }
+                exportContent = csv.toString();
+            } else {
+                StringBuilder html = new StringBuilder();
+                html.append("<!DOCTYPE html>\n");
+                html.append("<html><head>\n");
+                html.append("<meta charset=\"UTF-8\">\n");
+                html.append("<title>Application Log Export - ").append(APP_NAME).append("</title>\n");
+                html.append("<style>\n");
+                html.append("body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }\n");
+                html.append(".header { background-color: #2d5a7b; color: white; padding: 20px; border-radius: 8px 8px 0 0; }\n");
+                html.append("h1 { margin: 0 0 10px 0; }\n");
+                html.append(".info { background-color: #e8f4f8; padding: 15px; border: 1px solid #b8d4e3; }\n");
+                html.append(".info p { margin: 5px 0; }\n");
+                html.append(".label { font-weight: bold; color: #2d5a7b; }\n");
+                html.append(".content { background-color: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 0 0 8px 8px; overflow-x: auto; }\n");
+                html.append("pre { margin: 0; white-space: pre-wrap; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; }\n");
+                html.append(".footer { margin-top: 20px; text-align: center; color: #666; font-size: 12px; }\n");
+                html.append("</style>\n");
+                html.append("</head><body>\n");
+                html.append("<div class=\"header\">\n");
+                html.append("<h1>Application Log Export</h1>\n");
+                html.append("</div>\n");
+                html.append("<div class=\"info\">\n");
+                html.append("<p><span class=\"label\">Application:</span> ").append(escapeHtml(APP_NAME)).append(" (").append(escapeHtml(APP_SHORT_NAME)).append(")</p>\n");
+                html.append("<p><span class=\"label\">Version:</span> ").append(escapeHtml(VERSION)).append("</p>\n");
+                html.append("<p><span class=\"label\">Export Time:</span> ").append(escapeHtml(exportTime)).append("</p>\n");
+                html.append("<p><span class=\"label\">Format:</span> ").append(escapeHtml(formats[formatChoice].split(" \\*")[0])).append("</p>\n");
+                html.append("<p><span class=\"label\">Operating System:</span> ").append(escapeHtml(osInfo)).append("</p>\n");
+                html.append("<p><span class=\"label\">Java Version:</span> ").append(escapeHtml(javaVersion)).append("</p>\n");
+                html.append("<p><span class=\"label\">Total Lines:</span> ").append(logLineCount).append("</p>\n");
+                html.append("<p><span class=\"label\">Total Characters:</span> ").append(logContent.length()).append("</p>\n");
+                html.append("</div>\n");
+                html.append("<div class=\"content\">\n");
+                html.append("<pre>").append(escapeHtml(logContent)).append("\n</pre>\n");
+                html.append("</div>\n");
+                html.append("<div class=\"footer\">\n");
+                html.append("<p>Generated by ").append(escapeHtml(APP_NAME)).append(" v").append(escapeHtml(VERSION)).append("</p>\n");
+                html.append("<p>Export Time: ").append(escapeHtml(exportTime)).append("</p>\n");
+                html.append("</div>\n");
+                html.append("</body></html>");
+                exportContent = html.toString();
+            }
+            
+            try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(selectedFile), "UTF-8")) {
+                writer.write(exportContent);
+            }
+            
+            Logger.info("Application log exported successfully: " + selectedFile.getName(), "Main");
+            JOptionPane.showMessageDialog(frame, "Log exported successfully to:\n" + selectedFile.getAbsolutePath(), "Export Successful", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException ex) {
+            Logger.error("Failed to export application log: " + ex.getMessage(), "Main");
+            JOptionPane.showMessageDialog(frame, "Failed to export log:\n" + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private String escapeHtml(String text) {
+        if (text == null) return "";
+        return text.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("\"", "&quot;")
+                   .replace("'", "&#39;");
+    }
+    
+    private void exportServerLog(JarRunner jarRunner, String displayName) {
+        String logContent = jarRunner.getOutputPanel().getText();
+        if (logContent == null || logContent.isEmpty()) {
+            JOptionPane.showMessageDialog(frame, "无日志内容可导出", "提示", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        
+        String[] formats = {"TXT 文本文件 (*.txt)", "CSV 逗号分隔文件 (*.csv)", "HTML 网页文件 (*.html)"};
+        int formatChoice = JOptionPane.showOptionDialog(
+            frame,
+            "选择导出格式:",
+            "导出服务器日志",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            formats,
+            formats[0]
+        );
+        
+        if (formatChoice < 0) {
+            return;
+        }
+        
+        String[] extensions = {".txt", ".csv", ".html"};
+        String prefix = sanitizeFileName(displayName) + "_" + System.currentTimeMillis();
+        
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("保存服务器日志文件");
+        fileChooser.setSelectedFile(new File(prefix + extensions[formatChoice]));
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+            formats[formatChoice].split(" \\*")[0],
+            extensions[formatChoice].substring(1)
+        ));
+        
+        int result = fileChooser.showSaveDialog(frame);
+        if (result != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        
+        File selectedFile = fileChooser.getSelectedFile();
+        String filePath = selectedFile.getAbsolutePath();
+        if (!filePath.toLowerCase().endsWith(extensions[formatChoice])) {
+            selectedFile = new File(filePath + extensions[formatChoice]);
+        }
+        
+        try {
+            String exportContent;
+            int logLineCount = logContent.split("\n").length;
+            String exportTime = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date());
+            String osInfo = System.getProperty("os.name") + " " + System.getProperty("os.version") + " (" + System.getProperty("os.arch") + ")";
+            String javaVersion = System.getProperty("java.version");
+            
+            if (formatChoice == 0) {
+                StringBuilder txt = new StringBuilder();
+                txt.append("================================================================================\n");
+                txt.append("                              SERVER LOG EXPORT\n");
+                txt.append("================================================================================\n\n");
+                txt.append("Application: ").append(APP_NAME).append(" (").append(APP_SHORT_NAME).append(")\n");
+                txt.append("Version: ").append(VERSION).append("\n");
+                txt.append("Server Name: ").append(displayName).append("\n");
+                txt.append("Export Time: ").append(exportTime).append("\n");
+                txt.append("Format: ").append(formats[formatChoice].split(" \\*")[0]).append("\n");
+                txt.append("Operating System: ").append(osInfo).append("\n");
+                txt.append("Java Version: ").append(javaVersion).append("\n");
+                txt.append("Total Lines: ").append(logLineCount).append("\n");
+                txt.append("Total Characters: ").append(logContent.length()).append("\n");
+                txt.append("\n--------------------------------------------------------------------------------\n");
+                txt.append("                               LOG CONTENT\n");
+                txt.append("--------------------------------------------------------------------------------\n\n");
+                txt.append(logContent);
+                txt.append("\n================================================================================\n");
+                txt.append("                           END OF LOG FILE\n");
+                txt.append("================================================================================\n");
+                exportContent = txt.toString();
+            } else if (formatChoice == 1) {
+                StringBuilder csv = new StringBuilder();
+                csv.append("\"Application\",\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(APP_NAME).append(" (").append(APP_SHORT_NAME).append(")\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Version\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(VERSION).append("\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Server Name\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(escapeCsv(displayName)).append("\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Export Time\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(exportTime).append("\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"Format\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(formats[formatChoice].split(" \\*")[0]).append("\",\"\",\"\",\"\"\n");
+                csv.append("\"Operating System\",\"\",\"\",\"\"\n");
+                csv.append("\"").append(osInfo).append("\",\"\",\"\"\n");
+                csv.append("\"Java Version\",\"\",\"\"\n");
+                csv.append("\"").append(javaVersion).append("\",\"\"\n");
+                csv.append("\"Total Lines\",\"\"\n");
+                csv.append("\"").append(logLineCount).append("\"\n");
+                csv.append("\"Total Characters\",\"\"\n");
+                csv.append("\"").append(logContent.length()).append("\"\n");
+                csv.append("\"\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                csv.append("\"LOG CONTENT\",\"\",\"\",\"\",\"\",\"\",\"\",\"\"\n");
+                String[] lines = logContent.split("\n");
+                for (String line : lines) {
+                    String escapedLine = escapeCsv(line);
+                    csv.append("\"").append(escapedLine).append("\"\n");
+                }
+                exportContent = csv.toString();
+            } else {
+                StringBuilder html = new StringBuilder();
+                html.append("<!DOCTYPE html>\n");
+                html.append("<html><head>\n");
+                html.append("<meta charset=\"UTF-8\">\n");
+                html.append("<title>Server Log Export - ").append(escapeHtml(displayName)).append("</title>\n");
+                html.append("<style>\n");
+                html.append("body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }\n");
+                html.append(".header { background-color: #2d5a7b; color: white; padding: 20px; border-radius: 8px 8px 0 0; }\n");
+                html.append("h1 { margin: 0 0 10px 0; }\n");
+                html.append(".info { background-color: #e8f4f8; padding: 15px; border: 1px solid #b8d4e3; }\n");
+                html.append(".info p { margin: 5px 0; }\n");
+                html.append(".label { font-weight: bold; color: #2d5a7b; }\n");
+                html.append(".content { background-color: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 0 0 8px 8px; overflow-x: auto; }\n");
+                html.append("pre { margin: 0; white-space: pre-wrap; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; }\n");
+                html.append(".footer { margin-top: 20px; text-align: center; color: #666; font-size: 12px; }\n");
+                html.append("</style>\n");
+                html.append("</head><body>\n");
+                html.append("<div class=\"header\">\n");
+                html.append("<h1>Server Log Export</h1>\n");
+                html.append("</div>\n");
+                html.append("<div class=\"info\">\n");
+                html.append("<p><span class=\"label\">Application:</span> ").append(escapeHtml(APP_NAME)).append(" (").append(escapeHtml(APP_SHORT_NAME)).append(")</p>\n");
+                html.append("<p><span class=\"label\">Version:</span> ").append(escapeHtml(VERSION)).append("</p>\n");
+                html.append("<p><span class=\"label\">Server Name:</span> ").append(escapeHtml(displayName)).append("</p>\n");
+                html.append("<p><span class=\"label\">Export Time:</span> ").append(escapeHtml(exportTime)).append("</p>\n");
+                html.append("<p><span class=\"label\">Format:</span> ").append(escapeHtml(formats[formatChoice].split(" \\*")[0])).append("</p>\n");
+                html.append("<p><span class=\"label\">Operating System:</span> ").append(escapeHtml(osInfo)).append("</p>\n");
+                html.append("<p><span class=\"label\">Java Version:</span> ").append(escapeHtml(javaVersion)).append("</p>\n");
+                html.append("<p><span class=\"label\">Total Lines:</span> ").append(logLineCount).append("</p>\n");
+                html.append("<p><span class=\"label\">Total Characters:</span> ").append(logContent.length()).append("</p>\n");
+                html.append("</div>\n");
+                html.append("<div class=\"content\">\n");
+                html.append("<pre>").append(escapeHtml(logContent)).append("\n</pre>\n");
+                html.append("</div>\n");
+                html.append("<div class=\"footer\">\n");
+                html.append("<p>Generated by ").append(escapeHtml(APP_NAME)).append(" v").append(escapeHtml(VERSION)).append("</p>\n");
+                html.append("<p>Export Time: ").append(escapeHtml(exportTime)).append("</p>\n");
+                html.append("</div>\n");
+                html.append("</body></html>");
+                exportContent = html.toString();
+            }
+            
+            try (OutputStreamWriter writer = new OutputStreamWriter(new FileOutputStream(selectedFile), "UTF-8")) {
+                writer.write(exportContent);
+            }
+            
+            Logger.info("Server log exported successfully: " + selectedFile.getName() + " (Server: " + displayName + ")", "Main");
+            JOptionPane.showMessageDialog(frame, "Server log exported successfully to:\n" + selectedFile.getAbsolutePath(), "Export Successful", JOptionPane.INFORMATION_MESSAGE);
+        } catch (IOException ex) {
+            Logger.error("Failed to export server log: " + ex.getMessage() + " (Server: " + displayName + ")", "Main");
+            JOptionPane.showMessageDialog(frame, "Failed to export server log:\n" + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+    
+    private String escapeCsv(String text) {
+        if (text == null) return "";
+        return text.replace("\"", "\"\"");
+    }
+    
+    private String sanitizeFileName(String fileName) {
+        if (fileName == null) return "server";
+        return fileName.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+    
     private void loadConfig() {
         try (InputStream input = new FileInputStream(configFile)) {
             config.load(input);
@@ -749,10 +1101,17 @@ public class Main {
         String displayName = jarRunner.getDisplayName();
         
         JPanel serverPanel = new JPanel(new BorderLayout());
-        JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel statusPanel = new JPanel(new BorderLayout());
+        JPanel statusLeftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JLabel statusLabel = new JLabel("服务器状态: 已停止");
         statusLabel.setForeground(Color.RED);
-        statusPanel.add(statusLabel);
+        statusLeftPanel.add(statusLabel);
+        statusPanel.add(statusLeftPanel, BorderLayout.WEST);
+        JPanel statusRightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton exportServerLogButton = new JButton("导出日志");
+        exportServerLogButton.addActionListener(e -> exportServerLog(jarRunner, displayName));
+        statusRightPanel.add(exportServerLogButton);
+        statusPanel.add(statusRightPanel, BorderLayout.EAST);
         serverPanel.add(statusPanel, BorderLayout.NORTH);
         serverPanel.add(outputPanel, BorderLayout.CENTER);
         JPanel commandPanel = new JPanel(new BorderLayout(5, 5));

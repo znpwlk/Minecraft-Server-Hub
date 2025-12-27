@@ -56,6 +56,10 @@ public class ColorOutputPanel extends JScrollPane {
     public void append(String text) {
         appendColorText(text);
     }
+    
+    public String getText() {
+        try { return document.getText(0, document.getLength()); } catch (BadLocationException e) { return ""; } }
+    
     public void appendColorText(String text) {
         try {
             Pattern pattern = Pattern.compile("\u001B\\[(\\d+(?:;\\d+)*)m");
