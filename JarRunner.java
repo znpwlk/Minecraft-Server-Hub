@@ -22,6 +22,7 @@ public class JarRunner {
     private GameRuleCallback gameRuleCallback;
     
     private boolean autoRestartEnabled;
+    private boolean forceKeepAlive;
     private int maxHourlyAttempts;
     private int restartInterval;
     private AtomicInteger currentHourlyAttempts;
@@ -35,6 +36,7 @@ public class JarRunner {
         this.outputPanel = outputPanel;
         this.status = Status.STOPPED;
         this.autoRestartEnabled = false;
+        this.forceKeepAlive = false;
         this.maxHourlyAttempts = 3;
         this.restartInterval = 10;
         this.currentHourlyAttempts = new AtomicInteger(0);
@@ -108,6 +110,14 @@ public class JarRunner {
         this.autoRestartEnabled = enabled;
     }
     
+    public boolean isForceKeepAlive() {
+        return forceKeepAlive;
+    }
+    
+    public void setForceKeepAlive(boolean enabled) {
+        this.forceKeepAlive = enabled;
+    }
+    
     public void setRestartSettings(int maxAttempts, int intervalSeconds) {
         this.maxHourlyAttempts = maxAttempts;
         this.restartInterval = intervalSeconds;
@@ -162,7 +172,7 @@ public class JarRunner {
         
         Logger.warn("Detected server process terminated: " + jarPath, "JarRunner");
         outputPanel.append("[MSH] Detected server process terminated\n");
-        if (isNormalStop) {
+        if (isNormalStop && !forceKeepAlive) {
             Logger.info("Server normal shutdown, skipping auto-restart: " + jarPath, "JarRunner");
             outputPanel.append("[MSH] Server normal shutdown, skipping auto-restart\n");
             status = Status.STOPPED;
@@ -172,22 +182,32 @@ public class JarRunner {
         
         checkAndResetHourlyCounter();
         
-        if (autoRestartEnabled && currentHourlyAttempts.get() < maxHourlyAttempts) {
-            int attempts = currentHourlyAttempts.incrementAndGet();
-            lastRestartTimestamp = System.currentTimeMillis();
-            Logger.warn(String.format("Server abnormal termination detected, auto-restart in %d seconds (attempt %d/%d this hour)", 
-                restartInterval, attempts, maxHourlyAttempts), "JarRunner");
-            Logger.warn("WARN: Server process terminated unexpectedly - initiating auto-restart sequence", "JarRunner");
-            outputPanel.append(String.format("[MSH] Server abnormal termination detected, auto-restart in %d seconds (attempt %d/%d this hour)", 
-                restartInterval, attempts, maxHourlyAttempts) + "\n");
+        boolean withinLimit = maxHourlyAttempts == -1 || currentHourlyAttempts.get() < maxHourlyAttempts;
+        boolean shouldRestart = forceKeepAlive || (autoRestartEnabled && withinLimit);
+        
+        if (shouldRestart) {
+            if (!forceKeepAlive) {
+                int attempts = currentHourlyAttempts.incrementAndGet();
+                lastRestartTimestamp = System.currentTimeMillis();
+                String attemptInfo = maxHourlyAttempts == -1 
+                    ? String.format(" (attempt %d this hour)", attempts)
+                    : String.format(" (attempt %d/%d this hour)", attempts, maxHourlyAttempts);
+                Logger.warn("Server abnormal termination detected, auto-restart in " + restartInterval + " seconds" + attemptInfo, "JarRunner");
+                Logger.warn("WARN: Server process terminated unexpectedly - initiating auto-restart sequence", "JarRunner");
+                outputPanel.append("[MSH] Server abnormal termination detected, auto-restart in " + restartInterval + " seconds" + attemptInfo + "\n");
+            } else {
+                lastRestartTimestamp = System.currentTimeMillis();
+                Logger.warn(String.format("Force keep alive mode: auto-restart in %d seconds", restartInterval), "JarRunner");
+                outputPanel.append(String.format("[MSH] Force keep alive mode: auto-restart in %d seconds\n", restartInterval) + "\n");
+            }
             
             Thread restartThread = new Thread(() -> {
                 try {
                     Thread.sleep(restartInterval * 1000);
                     checkAndResetHourlyCounter();
-                    if (status == Status.STOPPED && autoRestartEnabled && currentHourlyAttempts.get() <= maxHourlyAttempts) {
-                        Logger.info(String.format("Executing auto-restart attempt %d", attempts), "JarRunner");
-                        outputPanel.append(String.format("[MSH] Executing auto-restart attempt %d...", attempts) + "\n");
+                    if (status == Status.STOPPED && shouldRestart) {
+                        Logger.info("Executing auto-restart", "JarRunner");
+                        outputPanel.append("[MSH] Executing auto-restart...\n");
                         JarRunner.this.start();
                     }
                 } catch (InterruptedException e) {
@@ -196,7 +216,7 @@ public class JarRunner {
             });
             restartThread.setDaemon(true);
             restartThread.start();
-        } else if (currentHourlyAttempts.get() >= maxHourlyAttempts) {
+        } else if (autoRestartEnabled && !forceKeepAlive && maxHourlyAttempts != -1 && currentHourlyAttempts.get() >= maxHourlyAttempts) {
             Logger.error("Auto-restart attempts exhausted for this hour, stopping restart attempts: " + jarPath, "JarRunner");
             outputPanel.append("[MSH] Auto-restart attempts exhausted for this hour, stopping restart attempts\n");
         }

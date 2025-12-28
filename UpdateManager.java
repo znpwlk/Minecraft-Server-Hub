@@ -527,10 +527,26 @@ public class UpdateManager {
     private void downloadAndUpdate(String downloadUrl, String sha256, String version) {
         Logger.info("Starting download for version " + version, "UpdateManager");
 
+        String currentJarPath = getCurrentJarPath();
+        boolean isDevEnvironment = currentJarPath != null && currentJarPath.endsWith(".java");
+
+        File currentJarFile = null;
+        final File[] targetDir = new File[1];
+        if (!isDevEnvironment && currentJarPath != null) {
+            currentJarFile = new File(currentJarPath);
+            targetDir[0] = currentJarFile.getParentFile();
+        }
+
         JFrame frame = main.getFrame();
         if (frame == null) {
             Logger.error("Main frame is null, cannot show download progress dialog", "UpdateManager");
             JOptionPane.showMessageDialog(null, "更新失败：无法显示下载窗口", "更新错误", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        if (!isDevEnvironment && (targetDir[0] == null || !targetDir[0].exists())) {
+            Logger.error("Target directory does not exist: " + (targetDir[0] != null ? targetDir[0].getAbsolutePath() : "null"), "UpdateManager");
+            JOptionPane.showMessageDialog(frame, "更新失败：无法找到目标目录", "更新错误", JOptionPane.ERROR_MESSAGE);
             return;
         }
 
@@ -564,7 +580,6 @@ public class UpdateManager {
         Thread downloadThread = new Thread(() -> {
             File tempFile = null;
             boolean downloadSuccess = false;
-            boolean isAutoUpdate = true;
             final AtomicLong downloadedBytes = new AtomicLong(0);
             long startTime = System.currentTimeMillis();
             long lastUpdateTime = startTime;
@@ -572,10 +587,10 @@ public class UpdateManager {
             final JFrame dialogFrame = frame;
 
             try {
-                File mshDir = new File(UPDATE_DIR);
-                if (!mshDir.exists() && !mshDir.mkdirs()) {
-                    Logger.error("Failed to create update directory: " + mshDir.getAbsolutePath(), "UpdateManager");
-                    throw new IOException("Failed to create update directory");
+                File downloadDir = isDevEnvironment ? new File(UPDATE_DIR) : targetDir[0];
+                if (!downloadDir.exists() && !downloadDir.mkdirs()) {
+                    Logger.error("Failed to create download directory: " + downloadDir.getAbsolutePath(), "UpdateManager");
+                    throw new IOException("Failed to create download directory");
                 }
 
                 String fileName;
@@ -585,15 +600,15 @@ public class UpdateManager {
                 } else {
                     fileName = "Minecraft-Server-Hub-" + version + ".jar";
                 }
-                
+
                 fileName = sanitizeFileName(fileName);
-                
+
                 if (!fileName.toLowerCase().endsWith(".jar")) {
                     fileName = fileName + ".jar";
                 }
                 Logger.info("Download file name: " + fileName, "UpdateManager");
 
-                tempFile = new File(mshDir, "temp_update_" + fileName);
+                tempFile = new File(downloadDir, "temp_update_" + fileName);
                 Logger.info("Temp file path: " + tempFile.getAbsolutePath(), "UpdateManager");
 
                 URI uri = URI.create(downloadUrl);
@@ -703,10 +718,15 @@ public class UpdateManager {
                     finalStatusLabel.setText("正在移动文件...");
                 });
 
-                String currentJarPath = getCurrentJarPath();
-                boolean isDevEnvironment = currentJarPath != null && currentJarPath.endsWith(".java");
+                Logger.info("Download completed, verifying SHA256...", "UpdateManager");
+                if (!verifySHA256(tempFile, sha256)) {
+                    tempFile.delete();
+                    throw new IOException("SHA256 verification failed");
+                }
+                Logger.info("SHA256 verification passed", "UpdateManager");
+                downloadSuccess = true;
 
-                File finalFile = new File(mshDir, fileName);
+                File finalFile = new File(downloadDir, fileName);
                 if (finalFile.exists()) {
                     finalFile.delete();
                 }
@@ -723,9 +743,10 @@ public class UpdateManager {
                                 "更新完成", JOptionPane.INFORMATION_MESSAGE);
                     });
                 } else {
+                    String oldJarPath = currentJarPath;
                     SwingUtilities.invokeLater(() -> {
                         finalProgressDialog.dispose();
-                        askUserForRestart(finalFile, version, isAutoUpdate);
+                        askUserForRestart(finalFile, version, oldJarPath);
                     });
                 }
 
@@ -820,20 +841,17 @@ public class UpdateManager {
         }
     }
 
-    private void askUserForRestart(File newJarFile, String version, boolean isAutoUpdate) {
+    private void askUserForRestart(File newJarFile, String version, String oldJarPath) {
         JFrame frame = main.getFrame();
         if (frame == null) {
             Logger.error("Main frame is null, cannot show restart dialog", "UpdateManager");
             return;
         }
         
-        String currentJarPath = getCurrentJarPath();
-        boolean canDeleteOld = isAutoUpdate && currentJarPath != null &&
-                !currentJarPath.endsWith(".java") && !currentJarPath.equals(newJarFile.getAbsolutePath());
-
+        boolean hasOldJar = oldJarPath != null && !oldJarPath.endsWith(".java") && !oldJarPath.equals(newJarFile.getAbsolutePath());
         String message;
-        if (canDeleteOld) {
-            message = "更新完成！\n\n版本: " + version + "\n文件: " + newJarFile.getName() + "\n\n是否立即重启应用并删除旧版本？";
+        if (hasOldJar) {
+            message = "更新完成！\n\n版本: " + version + "\n新文件: " + newJarFile.getName() + "\n\n是否立即重启并删除旧版本？";
         } else {
             message = "更新完成！\n\n版本: " + version + "\n文件: " + newJarFile.getName() + "\n\n是否立即重启应用？";
         }
@@ -843,12 +861,17 @@ public class UpdateManager {
                 "更新完成", JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE);
 
         if (result == JOptionPane.YES_OPTION) {
-            openNewVersion(newJarFile, version, canDeleteOld);
+            openNewVersion(newJarFile, version, oldJarPath);
         } else {
-            String hint = canDeleteOld ? "\n\n提示: 旧版本文件位于: " + escapeHtml(currentJarPath) : "";
-            JOptionPane.showMessageDialog(frame,
-                    "新版本文件已准备好，您可以稍后手动启动。" + hint,
-                    "更新完成", JOptionPane.INFORMATION_MESSAGE);
+            if (hasOldJar) {
+                JOptionPane.showMessageDialog(frame,
+                        "新版本文件已准备好，旧版本文件位于:\n" + escapeHtml(oldJarPath),
+                        "更新完成", JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(frame,
+                        "新版本文件已准备好，您可以稍后手动启动。",
+                        "更新完成", JOptionPane.INFORMATION_MESSAGE);
+            }
         }
     }
 
@@ -888,18 +911,13 @@ public class UpdateManager {
          return fileName;
      }
 
-    private void openNewVersion(File newJarFile, String version, boolean canDeleteOld) {
+    private void openNewVersion(File newJarFile, String version, String oldJarPath) {
         JFrame frame = main.getFrame();
         
         try {
-            Logger.info("=== Open New Version Debug ===", "UpdateManager");
-            Logger.info("New JAR file absolute path: " + newJarFile.getAbsolutePath(), "UpdateManager");
-            Logger.info("New JAR file exists: " + newJarFile.exists(), "UpdateManager");
-            Logger.info("New JAR file size: " + (newJarFile.exists() ? newJarFile.length() : 0), "UpdateManager");
-
-            String currentPath = getCurrentJarPath();
-            Logger.info("Current running JAR path: " + currentPath, "UpdateManager");
-            Logger.info("Can delete old version: " + canDeleteOld, "UpdateManager");
+            Logger.info("=== Open New Version ===", "UpdateManager");
+            Logger.info("New JAR file: " + newJarFile.getAbsolutePath(), "UpdateManager");
+            Logger.info("Old JAR file: " + oldJarPath, "UpdateManager");
 
             String canonicalNewPath = newJarFile.getCanonicalPath();
             File newJarDir = newJarFile.getParentFile();
@@ -915,8 +933,8 @@ public class UpdateManager {
                 }
             }
 
-            if (canDeleteOld) {
-                deleteOldVersion(newJarFile);
+            if (oldJarPath != null && !oldJarPath.endsWith(".java")) {
+                preferenceManager.setPendingDeleteOldVersion(oldJarPath);
             }
             
             String javaHome = System.getProperty("java.home");
@@ -982,48 +1000,6 @@ public class UpdateManager {
                         "新版本下载成功，但启动失败。请手动运行: " + escapeHtml(newJarFile.getAbsolutePath()),
                         "启动失败", JOptionPane.WARNING_MESSAGE);
             });
-        }
-    }
-
-    private void deleteOldVersion(File currentJarFile) {
-        String currentJarPath = getCurrentJarPath();
-        if (currentJarPath == null || currentJarPath.endsWith(".java")) {
-            return;
-        }
-
-        try {
-            File currentFile = new File(currentJarPath);
-            String canonicalCurrentPath = currentFile.getCanonicalPath();
-            String canonicalNewPath = currentJarFile.getCanonicalPath();
-            
-            if (canonicalCurrentPath.equalsIgnoreCase(canonicalNewPath)) {
-                Logger.info("Old and new version are the same file, skipping deletion", "UpdateManager");
-                return;
-            }
-
-            File currentDir = currentFile.getCanonicalFile().getParentFile();
-            String oldFileName = currentFile.getName();
-            File oldFile = new File(currentDir, oldFileName);
-            String canonicalOldPath = oldFile.getCanonicalPath();
-            
-            if (!canonicalOldPath.toLowerCase().startsWith(currentDir.getCanonicalPath().toLowerCase() + File.separator)) {
-                Logger.error("Path traversal attempt detected in deleteOldVersion: " + canonicalOldPath, "UpdateManager");
-                return;
-            }
-            
-            if (oldFile.exists() && oldFile.isFile() && oldFile.canWrite()) {
-                if (oldFile.delete()) {
-                    Logger.info("Deleted old version file: " + canonicalOldPath, "UpdateManager");
-                } else {
-                    Logger.warn("Failed to delete old version file: " + canonicalOldPath, "UpdateManager");
-                }
-            }
-        } catch (SecurityException e) {
-            Logger.error("Security violation in deleteOldVersion: " + e.getMessage(), "UpdateManager");
-        } catch (IOException e) {
-            Logger.error("I/O error in deleteOldVersion: " + e.getMessage(), "UpdateManager");
-        } catch (Exception e) {
-            Logger.error("Unexpected error in deleteOldVersion: " + e.getMessage(), "UpdateManager");
         }
     }
 }

@@ -5,6 +5,7 @@ import java.io.UnsupportedEncodingException;
 public class EncodingUtils {
     private static final String DEFAULT_CHARSET = "UTF-8";
     private static String detectedCharset = null;
+    private static String serverProcessCharset = null;
     
     public static String getOptimalCharset() {
         if (detectedCharset != null) {
@@ -18,6 +19,22 @@ public class EncodingUtils {
         detectedCharset = determineBestCharset(osName, fileEncoding, consoleEncoding);
         
         return detectedCharset;
+    }
+    
+    public static String getServerProcessCharset() {
+        if (serverProcessCharset != null) {
+            return serverProcessCharset;
+        }
+        
+        String osName = System.getProperty("os.name", "").toLowerCase();
+        
+        if (osName.contains("windows")) {
+            serverProcessCharset = "GBK";
+        } else {
+            serverProcessCharset = "UTF-8";
+        }
+        
+        return serverProcessCharset;
     }
     
     private static String determineBestCharset(String osName, String fileEncoding, String consoleEncoding) {

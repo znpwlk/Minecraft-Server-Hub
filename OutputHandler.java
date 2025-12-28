@@ -15,7 +15,7 @@ public class OutputHandler implements Runnable {
     private String jarPath;
     private boolean eulaChecked = false;
     public OutputHandler(InputStream inputStream, ColorOutputPanel outputPanel, JarRunner jarRunner, String jarPath) {
-        String charset = EncodingUtils.getOptimalCharset();
+        String charset = EncodingUtils.getServerProcessCharset();
         try {
             this.reader = new BufferedReader(new InputStreamReader(inputStream, charset));
         } catch (Exception e) {

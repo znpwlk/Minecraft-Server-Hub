@@ -71,4 +71,20 @@ public class PreferenceManager {
             return 0;
         }
     }
+
+    public String getPendingDeleteOldVersion() {
+        return preferences.getProperty("pendingDeleteOldVersion", null);
+    }
+
+    public void setPendingDeleteOldVersion(String oldVersionPath) {
+        if (oldVersionPath != null && !oldVersionPath.isEmpty()) {
+            preferences.setProperty("pendingDeleteOldVersion", oldVersionPath);
+            savePreferences();
+        }
+    }
+
+    public void clearPendingDeleteOldVersion() {
+        preferences.remove("pendingDeleteOldVersion");
+        savePreferences();
+    }
 }

@@ -60,6 +60,14 @@ public class ColorOutputPanel extends JScrollPane {
     public String getText() {
         try { return document.getText(0, document.getLength()); } catch (BadLocationException e) { return ""; } }
     
+    public void clearOutput() {
+        try {
+            document.remove(0, document.getLength());
+        } catch (BadLocationException ex) {
+            Logger.error("Failed to clear output panel: " + ex.getMessage(), "ColorOutputPanel");
+        }
+    }
+    
     public void appendColorText(String text) {
         try {
             Pattern pattern = Pattern.compile("\u001B\\[(\\d+(?:;\\d+)*)m");

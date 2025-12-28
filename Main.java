@@ -327,7 +327,48 @@ public class Main {
             }
         }
         frame.setVisible(true);
+        checkAndDeleteOldVersion();
+        deleteOldVersionAfterStartup();
         updateManager.checkForUpdates(false);
+    }
+
+    private void deleteOldVersionAfterStartup() {
+        Timer deleteTimer = new Timer(3000, e -> {
+            PreferenceManager prefManager = new PreferenceManager();
+            String oldVersionPath = prefManager.getPendingDeleteOldVersion();
+            if (oldVersionPath != null && !oldVersionPath.isEmpty()) {
+                File oldFile = new File(oldVersionPath);
+                if (oldFile.exists() && oldFile.isFile()) {
+                    boolean deleted = oldFile.delete();
+                    if (deleted) {
+                        Logger.info("Old version file deleted: " + oldVersionPath, "Main");
+                    } else {
+                        Logger.warn("Failed to delete old version file: " + oldVersionPath, "Main");
+                    }
+                }
+                prefManager.clearPendingDeleteOldVersion();
+            }
+        });
+        deleteTimer.setRepeats(false);
+        deleteTimer.start();
+    }
+
+    private void checkAndDeleteOldVersion() {
+        PreferenceManager prefManager = new PreferenceManager();
+        String oldVersionPath = prefManager.getPendingDeleteOldVersion();
+        if (oldVersionPath != null && !oldVersionPath.isEmpty()) {
+            File oldFile = new File(oldVersionPath);
+            if (oldFile.exists() && oldFile.isFile()) {
+                if (oldFile.delete()) {
+                    Logger.info("Successfully deleted old version file: " + oldVersionPath, "Main");
+                } else {
+                    Logger.warn("Failed to delete old version file: " + oldVersionPath, "Main");
+                }
+            } else {
+                Logger.info("Old version file does not exist or cannot be deleted: " + oldVersionPath, "Main");
+            }
+            prefManager.clearPendingDeleteOldVersion();
+        }
     }
     
     private void exportLogs() {
@@ -694,9 +735,10 @@ public class Main {
         return config.getProperty(key);
     }
 
-    private void saveGuardConfig(String jarPath, boolean enabled, int maxAttempts, int interval) {
+    private void saveGuardConfig(String jarPath, boolean enabled, boolean forceKeepAlive, int maxAttempts, int interval) {
         String keyPrefix = "guard." + jarPath + ".";
         config.setProperty(keyPrefix + "enabled", String.valueOf(enabled));
+        config.setProperty(keyPrefix + "forceKeepAlive", String.valueOf(forceKeepAlive));
         config.setProperty(keyPrefix + "maxAttempts", String.valueOf(maxAttempts));
         config.setProperty(keyPrefix + "interval", String.valueOf(interval));
         saveConfig();
@@ -705,6 +747,7 @@ public class Main {
     private Object[] loadGuardConfig(String jarPath) {
         String keyPrefix = "guard." + jarPath + ".";
         String enabledStr = config.getProperty(keyPrefix + "enabled");
+        String forceKeepAliveStr = config.getProperty(keyPrefix + "forceKeepAlive");
         String maxAttemptsStr = config.getProperty(keyPrefix + "maxAttempts");
         String intervalStr = config.getProperty(keyPrefix + "interval");
 
@@ -714,6 +757,7 @@ public class Main {
 
         return new Object[]{
             Boolean.parseBoolean(enabledStr),
+            Boolean.parseBoolean(forceKeepAliveStr != null ? forceKeepAliveStr : "false"),
             Integer.parseInt(maxAttemptsStr),
             Integer.parseInt(intervalStr)
         };
@@ -752,26 +796,33 @@ public class Main {
         gbc.gridx = 1;
         settingsPanel.add(enableCheckBox, gbc);
         
-        JLabel maxAttemptsLabel = new JLabel("每小时最大重启次数:");
-        JSpinner maxAttemptsSpinner = new JSpinner(new SpinnerNumberModel(3, 1, 10, 1));
-        int[] currentSettings = jarRunner.getRestartSettings();
-        int currentAttempts = jarRunner.getCurrentHourlyAttempts();
-        maxAttemptsSpinner.setValue(currentSettings[0]);
+        JLabel forceKeepAliveLabel = new JLabel("强制保持运行:");
+        JCheckBox forceKeepAliveCheckBox = new JCheckBox();
+        forceKeepAliveCheckBox.setSelected(jarRunner.isForceKeepAlive());
         
         gbc.gridx = 0; gbc.gridy = 1;
+        settingsPanel.add(forceKeepAliveLabel, gbc);
+        gbc.gridx = 1;
+        settingsPanel.add(forceKeepAliveCheckBox, gbc);
+        
+        JLabel maxAttemptsLabel = new JLabel("每小时最大重启次数(-1无限制):");
+        int[] currentSettings = jarRunner.getRestartSettings();
+        int currentAttempts = jarRunner.getCurrentHourlyAttempts();
+        JSpinner maxAttemptsSpinner = new JSpinner(new SpinnerNumberModel(currentSettings[0], -1, 999, 1));
+        
+        gbc.gridx = 0; gbc.gridy = 2;
         settingsPanel.add(maxAttemptsLabel, gbc);
         gbc.gridx = 1;
         settingsPanel.add(maxAttemptsSpinner, gbc);
         
         JLabel currentAttemptsLabel = new JLabel("本小时已重启: " + currentAttempts + " 次");
-        gbc.gridx = 0; gbc.gridy = 2;
+        gbc.gridx = 0; gbc.gridy = 3;
         settingsPanel.add(currentAttemptsLabel, gbc);
         
         JLabel intervalLabel = new JLabel("重启间隔(秒):");
-        JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(10, 5, 300, 5));
-        intervalSpinner.setValue(currentSettings[1]);
+        JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(currentSettings[1], 1, 300, 1));
         
-        gbc.gridx = 0; gbc.gridy = 3;
+        gbc.gridx = 0; gbc.gridy = 4;
         settingsPanel.add(intervalLabel, gbc);
         gbc.gridx = 1;
         settingsPanel.add(intervalSpinner, gbc);
@@ -779,12 +830,12 @@ public class Main {
         contentPanel.add(settingsPanel, BorderLayout.NORTH);
         
         JTextArea infoText = new JTextArea("进程守护功能会在服务器进程意外终止时自动尝试重启。\n\n" +
-            "每小时最大重启次数: 防止无限重启，每小时达到次数后将停止尝试\n" +
+            "强制保持运行: 无论正常还是异常关闭都会自动重启\n" +
+            "每小时最大重启次数: 防止无限重启，每小时达到次数后将停止尝试 (填-1表示无限制)\n" +
             "重启间隔: 每次重启尝试之间的等待时间\n" +
             "建议设置合理的间隔时间，避免频繁重启");
         infoText.setEditable(false);
-        infoText.setOpaque(true);
-        infoText.setBackground(new Color(240, 240, 240));
+        infoText.setOpaque(false);
         infoText.setFont(new Font(null, Font.PLAIN, 12));
         infoText.setWrapStyleWord(true);
         infoText.setLineWrap(true);
@@ -805,27 +856,31 @@ public class Main {
         
         okButton.addActionListener(e -> {
             boolean enabled = enableCheckBox.isSelected();
+            boolean forceKeepAlive = forceKeepAliveCheckBox.isSelected();
             int maxAttempts = (Integer) maxAttemptsSpinner.getValue();
             int interval = (Integer) intervalSpinner.getValue();
             
             jarRunner.setAutoRestartEnabled(enabled);
+            jarRunner.setForceKeepAlive(forceKeepAlive);
             jarRunner.setRestartSettings(maxAttempts, interval);
-            saveGuardConfig(jarRunner.getJarPath(), enabled, maxAttempts, interval);
-            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒\n", 
-                enabled ? "是" : "否", maxAttempts, interval));
+            saveGuardConfig(jarRunner.getJarPath(), enabled, forceKeepAlive, maxAttempts, interval);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已更新 - 启用: %s, 强制保持运行: %s, 每小时最大重启: %d次, 重启间隔: %d秒\n", 
+                enabled ? "是" : "否", forceKeepAlive ? "是" : "否", maxAttempts, interval));
             dialog.dispose();
         });
         
         applyButton.addActionListener(e -> {
             boolean enabled = enableCheckBox.isSelected();
+            boolean forceKeepAlive = forceKeepAliveCheckBox.isSelected();
             int maxAttempts = (Integer) maxAttemptsSpinner.getValue();
             int interval = (Integer) intervalSpinner.getValue();
             
             jarRunner.setAutoRestartEnabled(enabled);
+            jarRunner.setForceKeepAlive(forceKeepAlive);
             jarRunner.setRestartSettings(maxAttempts, interval);
-            saveGuardConfig(jarRunner.getJarPath(), enabled, maxAttempts, interval);
-            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 每小时最大重启: %d次, 重启间隔: %d秒\n", 
-                enabled ? "是" : "否", maxAttempts, interval));
+            saveGuardConfig(jarRunner.getJarPath(), enabled, forceKeepAlive, maxAttempts, interval);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 进程守护设置已应用 - 启用: %s, 强制保持运行: %s, 每小时最大重启: %d次, 重启间隔: %d秒\n", 
+                enabled ? "是" : "否", forceKeepAlive ? "是" : "否", maxAttempts, interval));
         });
         
         cancelButton.addActionListener(e -> dialog.dispose());
@@ -1088,7 +1143,8 @@ public class Main {
         Object[] guardConfig = loadGuardConfig(jarPath);
         if (guardConfig != null) {
             jarRunner.setAutoRestartEnabled((Boolean) guardConfig[0]);
-            jarRunner.setRestartSettings((Integer) guardConfig[1], (Integer) guardConfig[2]);
+            jarRunner.setForceKeepAlive((Boolean) guardConfig[1]);
+            jarRunner.setRestartSettings((Integer) guardConfig[2], (Integer) guardConfig[3]);
         }
 
         jarRunners.add(jarRunner);
@@ -1111,6 +1167,9 @@ public class Main {
         JButton exportServerLogButton = new JButton("导出日志");
         exportServerLogButton.addActionListener(e -> exportServerLog(jarRunner, displayName));
         statusRightPanel.add(exportServerLogButton);
+        JButton clearOutputButton = new JButton("清空输出");
+        clearOutputButton.addActionListener(e -> outputPanel.clearOutput());
+        statusRightPanel.add(clearOutputButton);
         statusPanel.add(statusRightPanel, BorderLayout.EAST);
         serverPanel.add(statusPanel, BorderLayout.NORTH);
         serverPanel.add(outputPanel, BorderLayout.CENTER);

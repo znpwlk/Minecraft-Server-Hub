@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.ArrayList;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.nio.charset.StandardCharsets;
 public class ConfigEditor extends JDialog {
     private enum ConfigType {
         STRING, BOOLEAN, NUMBER, SELECT
@@ -856,7 +857,7 @@ public class ConfigEditor extends JDialog {
     }
     private void loadJsonToTextArea() {
         try {
-            BufferedReader reader = new BufferedReader(new FileReader(selectedConfigFile));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(selectedConfigFile), java.nio.charset.StandardCharsets.UTF_8));
             StringBuilder content = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -871,7 +872,7 @@ public class ConfigEditor extends JDialog {
     private void loadListToTable() {
         listTableModel.setRowCount(0); 
         try {
-            BufferedReader reader = new BufferedReader(new FileReader(selectedConfigFile));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(selectedConfigFile), java.nio.charset.StandardCharsets.UTF_8));
             StringBuilder content = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
@@ -1006,7 +1007,7 @@ public class ConfigEditor extends JDialog {
                 jsonArray.add(jsonObject);
             }
             String jsonString = gson.toJson(jsonArray);
-            BufferedWriter writer = new BufferedWriter(new FileWriter(selectedConfigFile));
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(selectedConfigFile), StandardCharsets.UTF_8));
             writer.write(jsonString);
             writer.close();
         } catch (IOException e) {
@@ -1021,7 +1022,7 @@ public class ConfigEditor extends JDialog {
             return;
         }
         try {
-            BufferedWriter writer = new BufferedWriter(new FileWriter(selectedConfigFile));
+            BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(selectedConfigFile), StandardCharsets.UTF_8));
             writer.write(jsonTextArea.getText());
             writer.close();
         } catch (IOException e) {
