@@ -1,15 +1,13 @@
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
+import java.awt.event.*;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 public class Main {
-    public static final String VERSION = "1.0.8";
+    public static final String VERSION = "1.1.0";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -819,8 +817,8 @@ public class Main {
         gbc.gridx = 0; gbc.gridy = 3;
         settingsPanel.add(currentAttemptsLabel, gbc);
         
-        JLabel intervalLabel = new JLabel("重启间隔(秒):");
-        JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(currentSettings[1], 1, 300, 1));
+        JLabel intervalLabel = new JLabel("重启间隔(秒，0表示立即重启):");
+        JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(currentSettings[1], 0, 300, 1));
         
         gbc.gridx = 0; gbc.gridy = 4;
         settingsPanel.add(intervalLabel, gbc);
@@ -832,7 +830,7 @@ public class Main {
         JTextArea infoText = new JTextArea("进程守护功能会在服务器进程意外终止时自动尝试重启。\n\n" +
             "强制保持运行: 无论正常还是异常关闭都会自动重启\n" +
             "每小时最大重启次数: 防止无限重启，每小时达到次数后将停止尝试 (填-1表示无限制)\n" +
-            "重启间隔: 每次重启尝试之间的等待时间\n" +
+            "重启间隔: 每次重启尝试之间的等待时间 (填0表示立即重启)\n" +
             "建议设置合理的间隔时间，避免频繁重启");
         infoText.setEditable(false);
         infoText.setOpaque(false);
@@ -1324,12 +1322,14 @@ public class Main {
             }
             if (!finalCmd.isEmpty()) {
                 jarRunner.sendCommand(finalCmd);
+                jarRunner.addToHistory(finalCmd);
             }
         });
         sendCommandButton.addActionListener(e -> {
             String command = commandField.getText().trim();
             if (!command.isEmpty()) {
                 jarRunner.sendCommand(command);
+                jarRunner.addToHistory(command);
                 commandField.setText("");
             }
         });
@@ -1337,7 +1337,30 @@ public class Main {
             String command = commandField.getText().trim();
             if (!command.isEmpty()) {
                 jarRunner.sendCommand(command);
+                jarRunner.addToHistory(command);
                 commandField.setText("");
+            }
+        });
+        commandField.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_UP) {
+                    String prevCmd = jarRunner.getPreviousCommand();
+                    if (prevCmd != null) {
+                        commandField.setText(prevCmd);
+                        commandField.setCaretPosition(prevCmd.length());
+                    }
+                    e.consume();
+                } else if (e.getKeyCode() == KeyEvent.VK_DOWN) {
+                    String nextCmd = jarRunner.getNextCommand();
+                    if (nextCmd != null) {
+                        commandField.setText(nextCmd);
+                        commandField.setCaretPosition(nextCmd.length());
+                    } else {
+                        commandField.setText("");
+                    }
+                    e.consume();
+                }
             }
         });
         JPanel commandInputPanel = new JPanel(new BorderLayout(5, 5));

@@ -1,4 +1,6 @@
 import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class JarRunner {
@@ -29,6 +31,9 @@ public class JarRunner {
     private volatile long lastRestartTimestamp;
     private Thread hourlyResetThread;
     private volatile boolean isNormalStop = false;
+    private List<String> commandHistory = new ArrayList<>();
+    private int historyIndex = -1;
+    private static final int MAX_HISTORY_SIZE = 50;
     
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
         this.jarPath = jarPath;
@@ -181,6 +186,7 @@ public class JarRunner {
         }
         
         checkAndResetHourlyCounter();
+
         
         boolean withinLimit = maxHourlyAttempts == -1 || currentHourlyAttempts.get() < maxHourlyAttempts;
         boolean shouldRestart = forceKeepAlive || (autoRestartEnabled && withinLimit);
@@ -203,7 +209,9 @@ public class JarRunner {
             
             Thread restartThread = new Thread(() -> {
                 try {
-                    Thread.sleep(restartInterval * 1000);
+                    if (restartInterval > 0) {
+                        Thread.sleep(restartInterval * 1000L);
+                    }
                     checkAndResetHourlyCounter();
                     if (status == Status.STOPPED && shouldRestart) {
                         Logger.info("Executing auto-restart", "JarRunner");
@@ -260,7 +268,8 @@ public class JarRunner {
         }
         
         try {
-            ProcessBuilder processBuilder = new ProcessBuilder("java", "-jar", jarPath);
+            String javaCmd = System.getProperty("os.name").toLowerCase().contains("windows") ? "javaw" : "java";
+            ProcessBuilder processBuilder = new ProcessBuilder(javaCmd, "-jar", jarPath, "--nogui");
             processBuilder.directory(serverDir);
             processBuilder.redirectErrorStream(true);
             process = processBuilder.start();
@@ -474,5 +483,42 @@ public class JarRunner {
             Thread.currentThread().interrupt();
         }
         start();
+    }
+    
+    public void addToHistory(String command) {
+        if (command != null && !command.trim().isEmpty()) {
+            if (commandHistory.isEmpty() || !commandHistory.get(commandHistory.size() - 1).equals(command)) {
+                commandHistory.add(command);
+                if (commandHistory.size() > MAX_HISTORY_SIZE) {
+                    commandHistory.remove(0);
+                }
+            }
+            historyIndex = -1;
+        }
+    }
+    
+    public String getPreviousCommand() {
+        if (commandHistory.isEmpty()) {
+            return null;
+        }
+        if (historyIndex == -1) {
+            historyIndex = commandHistory.size() - 1;
+        } else if (historyIndex > 0) {
+            historyIndex--;
+        }
+        return commandHistory.get(historyIndex);
+    }
+    
+    public String getNextCommand() {
+        if (commandHistory.isEmpty() || historyIndex == -1) {
+            return null;
+        }
+        if (historyIndex < commandHistory.size() - 1) {
+            historyIndex++;
+            return commandHistory.get(historyIndex);
+        } else {
+            historyIndex = -1;
+            return null;
+        }
     }
 }
