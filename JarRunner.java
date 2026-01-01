@@ -1,11 +1,19 @@
 import java.io.*;
+import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.Deflater;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 public class JarRunner {
     public interface GameRuleCallback {
         void onGameRuleValue(String ruleName, String value);
+    }
+    
+    public interface BackupCallback {
+        void onBackupComplete(String zipPath, boolean success);
     }
     
     public enum Status {
@@ -35,6 +43,16 @@ public class JarRunner {
     private int historyIndex = -1;
     private static final int MAX_HISTORY_SIZE = 50;
     
+    private boolean backupEnabled;
+    private int backupIntervalMinutes;
+    private int maxBackupCount;
+    private int autoDeleteDays;
+    private Thread backupTimerThread;
+    private volatile boolean stopBackupTimer;
+    private BackupCallback backupCallback;
+    private volatile long lastBackupTime;
+    private volatile boolean isBackingUp = false;
+    
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
         this.jarPath = jarPath;
         this.customName = null;
@@ -46,6 +64,12 @@ public class JarRunner {
         this.restartInterval = 10;
         this.currentHourlyAttempts = new AtomicInteger(0);
         this.lastRestartTimestamp = 0;
+        this.backupEnabled = false;
+        this.backupIntervalMinutes = 60;
+        this.maxBackupCount = 10;
+        this.autoDeleteDays = 30;
+        this.lastBackupTime = 0;
+        this.stopBackupTimer = false;
         startHourlyResetThread();
     }
 
@@ -82,6 +106,328 @@ public class JarRunner {
         if (hourlyResetThread != null) {
             hourlyResetThread.interrupt();
         }
+        stopBackupTimerThread();
+    }
+    
+    public boolean isBackupEnabled() {
+        return backupEnabled;
+    }
+    
+    public void setBackupEnabled(boolean enabled) {
+        this.backupEnabled = enabled;
+        if (enabled) {
+            startBackupTimerThread();
+        } else {
+            stopBackupTimerThread();
+        }
+    }
+    
+    public int getBackupIntervalMinutes() {
+        return backupIntervalMinutes;
+    }
+    
+    public void setBackupIntervalMinutes(int minutes) {
+        this.backupIntervalMinutes = Math.max(1, minutes);
+        if (backupEnabled) {
+            stopBackupTimerThread();
+            startBackupTimerThread();
+        }
+    }
+    
+    public int getMaxBackupCount() {
+        return maxBackupCount;
+    }
+    
+    public void setMaxBackupCount(int count) {
+        this.maxBackupCount = Math.max(1, count);
+    }
+    
+    public int getAutoDeleteDays() {
+        return autoDeleteDays;
+    }
+    
+    public void setAutoDeleteDays(int days) {
+        this.autoDeleteDays = Math.max(0, days);
+    }
+    
+    public void setBackupCallback(BackupCallback callback) {
+        this.backupCallback = callback;
+    }
+    
+    private void startBackupTimerThread() {
+        stopBackupTimer = false;
+        if (backupTimerThread != null && backupTimerThread.isAlive()) {
+            return;
+        }
+        backupTimerThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted() && !stopBackupTimer) {
+                try {
+                    Thread.sleep(backupIntervalMinutes * 60 * 1000);
+                    if (stopBackupTimer) break;
+                    if (status == JarRunner.Status.RUNNING) {
+                        performBackup();
+                    }
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        });
+        backupTimerThread.setDaemon(true);
+        backupTimerThread.setName("backup-timer-" + jarPath);
+        backupTimerThread.start();
+    }
+    
+    public void stopBackupTimerThread() {
+        stopBackupTimer = true;
+        if (backupTimerThread != null && backupTimerThread.isAlive()) {
+            backupTimerThread.interrupt();
+            try {
+                backupTimerThread.join(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+    
+    private void performBackup() {
+        if (isBackingUp) {
+            return;
+        }
+        isBackingUp = true;
+        
+        try {
+            File jarFile = new File(jarPath);
+            if (!jarFile.exists() || !jarFile.canRead()) {
+                isBackingUp = false;
+                outputPanel.append("[MSH] 备份失败: 服务端文件不存在或无法读取\n");
+                Logger.error("Jar file does not exist or cannot be read: " + jarPath, "JarRunner");
+                if (backupCallback != null) {
+                    backupCallback.onBackupComplete(null, false);
+                }
+                return;
+            }
+            
+            File serverDir = jarFile.getParentFile();
+            if (serverDir == null || !serverDir.exists() || !serverDir.isDirectory()) {
+                isBackingUp = false;
+                outputPanel.append("[MSH] 备份失败: 服务端目录不存在\n");
+                Logger.error("Server directory does not exist", "JarRunner");
+                if (backupCallback != null) {
+                    backupCallback.onBackupComplete(null, false);
+                }
+                return;
+            }
+            
+            String safeServerName = sanitizeFileName(jarFile.getName());
+            File backupDir = new File("MSH/backup", safeServerName);
+            if (!backupDir.exists()) {
+                if (!backupDir.mkdirs()) {
+                    isBackingUp = false;
+                    outputPanel.append("[MSH] 备份失败: 无法创建备份目录\n");
+                    Logger.error("Failed to create backup directory: " + backupDir.getAbsolutePath(), "JarRunner");
+                    if (backupCallback != null) {
+                        backupCallback.onBackupComplete(null, false);
+                    }
+                    return;
+                }
+            }
+            
+            String dateStr = new java.text.SimpleDateFormat("yyyy-MM-dd").format(new java.util.Date());
+            String timeStr = new java.text.SimpleDateFormat("HH-mm-ss").format(new java.util.Date());
+            String sizeInfo = getServerDirSize(serverDir);
+            String zipName = safeServerName + "_backup_" + dateStr + "_" + timeStr + "_" + sizeInfo + ".zip";
+            File zipFile = new File(backupDir, zipName);
+            
+            outputPanel.append("[MSH] 正在创建备份...\n");
+            Logger.info("Starting backup for server: " + jarPath, "JarRunner");
+            
+            Thread backupThread = new Thread(() -> {
+                try {
+                    zipDirectory(serverDir.toPath(), zipFile.toPath());
+                    lastBackupTime = System.currentTimeMillis();
+                    if (!zipFile.exists() || zipFile.length() == 0) {
+                        throw new IOException("Backup file was not created or is empty");
+                    }
+                    isBackingUp = false;
+                    outputPanel.append("[MSH] 备份已完成: " + zipFile.getName() + "\n");
+                    Logger.info("Backup completed: " + zipFile.getAbsolutePath(), "JarRunner");
+                    if (backupCallback != null) {
+                        backupCallback.onBackupComplete(zipFile.getAbsolutePath(), true);
+                    }
+                } catch (Exception e) {
+                    isBackingUp = false;
+                    outputPanel.append("[MSH] 备份失败: " + e.getMessage() + "\n");
+                    Logger.error("Backup failed for server " + jarPath + ": " + e.getMessage(), "JarRunner");
+                    if (backupCallback != null) {
+                        backupCallback.onBackupComplete(null, false);
+                    }
+                }
+            });
+            backupThread.setDaemon(true);
+            backupThread.setName("backup-thread-" + safeServerName);
+            backupThread.start();
+        } catch (Exception e) {
+            isBackingUp = false;
+            outputPanel.append("[MSH] 备份失败: " + e.getMessage() + "\n");
+            Logger.error("Backup failed with exception: " + e.getMessage(), "JarRunner");
+            if (backupCallback != null) {
+                backupCallback.onBackupComplete(null, false);
+            }
+        }
+    }
+    
+    public boolean isBackingUp() {
+        return isBackingUp;
+    }
+    
+    private static final String[] BACKUP_EXCLUDE_PATTERNS = {
+        ".log", ".tmp", ".temp", "cache/", "logs/", "backup/", 
+        "session/", "crash-reports/", "forwarding/", "plugins/translations"
+    };
+    
+    private String getServerDirSize(File dir) {
+        long size = 0;
+        try {
+            size = Files.walk(dir.toPath())
+                .filter(p -> p.toFile().isFile())
+                .filter(p -> !isExcluded(p, dir.toPath()))
+                .mapToLong(p -> p.toFile().length())
+                .sum();
+        } catch (IOException e) {
+        }
+        return formatSize(size);
+    }
+    
+    private String formatSize(long bytes) {
+        if (bytes < 1024) return Math.round(bytes) + "B";
+        if (bytes < 1024 * 1024) return String.format("%.1fKB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1fMB", bytes / (1024.0 * 1024));
+        return String.format("%.2fGB", bytes / (1024.0 * 1024 * 1024));
+    }
+    
+    private void zipDirectory(Path sourceDir, Path targetZip) throws IOException {
+        List<Path> allPaths = Files.walk(sourceDir)
+            .filter(path -> !path.equals(sourceDir))
+            .filter(path -> !isExcluded(path, sourceDir))
+            .collect(java.util.stream.Collectors.toList());
+
+        List<ZipEntryData> entries = allPaths.parallelStream()
+            .map(path -> {
+                String relativePath = sourceDir.relativize(path).toString().replace("\\", "/");
+                if (path.toFile().isDirectory()) {
+                    relativePath += "/";
+                    return new ZipEntryData(relativePath, path.toFile().lastModified(), null, true);
+                }
+                try {
+                    byte[] content = null;
+                    if (!isAlreadyCompressed(path.toFile())) {
+                        content = readFileWithLock(path.toFile());
+                    }
+                    return new ZipEntryData(relativePath, path.toFile().lastModified(), content, false);
+                } catch (IOException e) {
+                    Logger.warn("Skipping locked file during backup: " + relativePath, "JarRunner");
+                    return null;
+                }
+            })
+            .filter(data -> data != null)
+            .collect(java.util.stream.Collectors.toList());
+
+        try (ZipOutputStream zos = new ZipOutputStream(
+                new BufferedOutputStream(new FileOutputStream(targetZip.toFile()), 131072))) {
+            zos.setLevel(Deflater.NO_COMPRESSION);
+            for (ZipEntryData entry : entries) {
+                try {
+                    ZipEntry zipEntry = new ZipEntry(entry.relativePath);
+                    zipEntry.setTime(entry.lastModified);
+                    zos.putNextEntry(zipEntry);
+                    if (!entry.isDirectory && entry.content != null) {
+                        zos.write(entry.content);
+                    } else if (!entry.isDirectory && isAlreadyCompressed(new File(sourceDir.toFile(), entry.relativePath))) {
+                        try (InputStream is = new BufferedInputStream(
+                                new FileInputStream(new File(sourceDir.toFile(), entry.relativePath)), 131072)) {
+                            byte[] buffer = new byte[131072];
+                            int len;
+                            while ((len = is.read(buffer)) > 0) {
+                                zos.write(buffer, 0, len);
+                            }
+                        }
+                    }
+                    zos.closeEntry();
+                } catch (IOException e) {
+                    Logger.error("Failed to add entry to zip: " + entry.relativePath, "JarRunner");
+                }
+            }
+        }
+    }
+    
+    private static class ZipEntryData {
+        final String relativePath;
+        final long lastModified;
+        final byte[] content;
+        final boolean isDirectory;
+        
+        ZipEntryData(String relativePath, long lastModified, byte[] content, boolean isDirectory) {
+            this.relativePath = relativePath;
+            this.lastModified = lastModified;
+            this.content = content;
+            this.isDirectory = isDirectory;
+        }
+    }
+    
+    private boolean isExcluded(Path path, Path sourceDir) {
+        String relativePath = sourceDir.relativize(path).toString().replace("\\", "/").toLowerCase();
+        for (String pattern : BACKUP_EXCLUDE_PATTERNS) {
+            if (pattern.endsWith("/")) {
+                if (relativePath.startsWith(pattern) || relativePath.contains(pattern)) {
+                    return true;
+                }
+            } else if (relativePath.endsWith(pattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private boolean isAlreadyCompressed(File file) {
+        String name = file.getName().toLowerCase();
+        return name.endsWith(".zip") || name.endsWith(".jar") || name.endsWith(".png") || 
+               name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif") ||
+               name.endsWith(".mp3") || name.endsWith(".mp4") || name.endsWith(".ogg") ||
+               name.endsWith(".webm") || name.endsWith(".gz") || name.endsWith(".bz2");
+    }
+    
+    private byte[] readFileWithLock(File file) throws IOException {
+        try {
+            return Files.readAllBytes(file.toPath());
+        } catch (IOException e) {
+            if (isFileLocked(e)) {
+                return new byte[0];
+            }
+            throw e;
+        }
+    }
+    
+    private boolean isFileLocked(IOException e) {
+        String message = e.getMessage();
+        return message != null && (
+            message.contains("locked") ||
+            message.contains("另一个程序") ||
+            message.contains("being used") ||
+            message.contains("The process cannot access")
+        );
+    }
+    
+    private String sanitizeFileName(String fileName) {
+        if (fileName == null) return "server";
+        return fileName.replaceAll("[\\\\/:*?\"<>|]", "_");
+    }
+    
+    public void triggerBackup() {
+        performBackup();
+    }
+    
+    public long getLastBackupTime() {
+        return lastBackupTime;
     }
     public Status getStatus() {
         return status;

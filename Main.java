@@ -3,9 +3,12 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
-import java.util.ArrayList;
+import java.text.SimpleDateFormat;
+import java.util.*;
 import java.util.List;
 import java.util.Properties;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 public class Main {
     public static final String VERSION = "1.1.0";
     private static final String AUTHOR = "znpwlk";
@@ -261,6 +264,7 @@ public class Main {
         JButton checkUpdateButton = new JButton("检查更新");
         checkUpdateButton.addActionListener(e -> updateManager.checkForUpdates());
         topPanel.add(checkUpdateButton);
+        
         tabbedPane = new JTabbedPane();
         tabbedPane.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -331,7 +335,7 @@ public class Main {
     }
 
     private void deleteOldVersionAfterStartup() {
-        Timer deleteTimer = new Timer(3000, e -> {
+        javax.swing.Timer deleteTimer = new javax.swing.Timer(3000, e -> {
             PreferenceManager prefManager = new PreferenceManager();
             String oldVersionPath = prefManager.getPendingDeleteOldVersion();
             if (oldVersionPath != null && !oldVersionPath.isEmpty()) {
@@ -761,8 +765,36 @@ public class Main {
         };
     }
     
+    private void saveBackupConfig(String jarPath, boolean enabled, int intervalMinutes, int maxCount, int deleteDays) {
+        String keyPrefix = "backup." + jarPath + ".";
+        config.setProperty(keyPrefix + "enabled", String.valueOf(enabled));
+        config.setProperty(keyPrefix + "interval", String.valueOf(intervalMinutes));
+        config.setProperty(keyPrefix + "maxCount", String.valueOf(maxCount));
+        config.setProperty(keyPrefix + "deleteDays", String.valueOf(deleteDays));
+        saveConfig();
+    }
+    
+    private Object[] loadBackupConfig(String jarPath) {
+        String keyPrefix = "backup." + jarPath + ".";
+        String enabledStr = config.getProperty(keyPrefix + "enabled");
+        String intervalStr = config.getProperty(keyPrefix + "interval");
+        String maxCountStr = config.getProperty(keyPrefix + "maxCount");
+        String deleteDaysStr = config.getProperty(keyPrefix + "deleteDays");
+
+        if (enabledStr == null || intervalStr == null) {
+            return null;
+        }
+
+        return new Object[]{
+            Boolean.parseBoolean(enabledStr),
+            Integer.parseInt(intervalStr),
+            maxCountStr != null ? Integer.parseInt(maxCountStr) : 10,
+            deleteDaysStr != null ? Integer.parseInt(deleteDaysStr) : 30
+        };
+    }
+    
     private void showGuardSettingsDialog(JarRunner jarRunner) {
-        JDialog dialog = new JDialog(frame, "进程守护设置", true);
+        JDialog dialog = new JDialog(frame, "进程守护设置", false);
         dialog.setLayout(new BorderLayout(20, 20));
         dialog.setSize(500, 350);
         dialog.setLocationRelativeTo(frame);
@@ -894,6 +926,825 @@ public class Main {
         dialog.setVisible(true);
     }
     
+    private void showBackupSettingsDialog(JarRunner jarRunner) {
+        JDialog dialog = new JDialog(frame, "备份管理 - " + new File(jarRunner.getJarPath()).getName(), false);
+        dialog.setLayout(new BorderLayout(15, 15));
+        dialog.setSize(750, 550);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setResizable(true);
+
+        JPanel mainPanel = new JPanel(new BorderLayout(15, 15));
+        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
+
+        DefaultListModel<String> backupListModel = new DefaultListModel<>();
+        JTextArea backupInfoArea = new JTextArea();
+
+        JPanel leftPanel = new JPanel(new BorderLayout(10, 10));
+        JLabel titleLabel = new JLabel("备份管理");
+        titleLabel.setFont(new Font(null, Font.BOLD, 16));
+        titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        leftPanel.add(titleLabel, BorderLayout.NORTH);
+
+        JPanel settingsPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.anchor = GridBagConstraints.WEST;
+
+        JCheckBox enableCheckBox = new JCheckBox("启用定时备份", jarRunner.isBackupEnabled());
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2;
+        settingsPanel.add(enableCheckBox, gbc);
+
+        JLabel intervalLabel = new JLabel("备份间隔:");
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1;
+        settingsPanel.add(intervalLabel, gbc);
+
+        JSpinner intervalSpinner = new JSpinner(new SpinnerNumberModel(jarRunner.getBackupIntervalMinutes(), 1, 1440, 1));
+        gbc.gridx = 1; gbc.gridy = 1;
+        settingsPanel.add(intervalSpinner, gbc);
+
+        JLabel minuteLabel = new JLabel("分钟");
+        gbc.gridx = 2; gbc.gridy = 1;
+        settingsPanel.add(minuteLabel, gbc);
+
+        JLabel maxCountLabel = new JLabel("最大备份条数:");
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1;
+        settingsPanel.add(maxCountLabel, gbc);
+
+        JSpinner maxCountSpinner = new JSpinner(new SpinnerNumberModel(jarRunner.getMaxBackupCount(), 1, 1000, 1));
+        gbc.gridx = 1; gbc.gridy = 2;
+        settingsPanel.add(maxCountSpinner, gbc);
+
+        JLabel countLabel = new JLabel("条");
+        gbc.gridx = 2; gbc.gridy = 2;
+        settingsPanel.add(countLabel, gbc);
+
+        JLabel deleteDaysLabel = new JLabel("自动删除多少天前的:");
+        gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 1;
+        settingsPanel.add(deleteDaysLabel, gbc);
+
+        JSpinner deleteDaysSpinner = new JSpinner(new SpinnerNumberModel(jarRunner.getAutoDeleteDays(), 0, 3650, 1));
+        gbc.gridx = 1; gbc.gridy = 3;
+        settingsPanel.add(deleteDaysSpinner, gbc);
+
+        JLabel daysLabel = new JLabel("天 (0表示不自动删除)");
+        gbc.gridx = 2; gbc.gridy = 3;
+        settingsPanel.add(daysLabel, gbc);
+
+        JLabel maxCountHintLabel = new JLabel("超过最大条数自动删除旧的");
+        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 3;
+        settingsPanel.add(maxCountHintLabel, gbc);
+
+        JButton backupNowButton = new JButton("立即备份");
+        backupNowButton.addActionListener(e -> {
+            if (jarRunner.isBackingUp()) {
+                return;
+            }
+            showBackupProgressDialog(dialog, jarRunner, backupListModel);
+        });
+        gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 1;
+        settingsPanel.add(backupNowButton, gbc);
+
+        long lastBackup = jarRunner.getLastBackupTime();
+        if (lastBackup > 0) {
+            String lastBackupStr = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(lastBackup));
+            JLabel lastBackupLabel = new JLabel("上次: " + lastBackupStr);
+            gbc.gridx = 1; gbc.gridy = 5; gbc.gridwidth = 2;
+            settingsPanel.add(lastBackupLabel, gbc);
+        }
+
+        leftPanel.add(settingsPanel, BorderLayout.CENTER);
+
+        JPanel infoPanel = new JPanel(new BorderLayout(5, 5));
+        infoPanel.setBorder(new EmptyBorder(10, 0, 0, 0));
+        JTextArea infoText = new JTextArea("备份目录: MSH/backup/服务端名称/\n备份包含服务端文件夹内的所有文件");
+        infoText.setEditable(false);
+        infoText.setOpaque(false);
+        infoText.setFont(new Font(null, Font.PLAIN, 11));
+        infoPanel.add(infoText, BorderLayout.NORTH);
+        leftPanel.add(infoPanel, BorderLayout.SOUTH);
+
+        mainPanel.add(leftPanel, BorderLayout.WEST);
+
+        JPanel rightPanel = new JPanel(new BorderLayout(10, 10));
+        JLabel listTitle = new JLabel("备份列表");
+        listTitle.setFont(new Font(null, Font.BOLD, 14));
+        
+        JPanel sortPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        sortPanel.add(new JLabel("排序:"));
+        ButtonGroup sortGroup = new ButtonGroup();
+        JRadioButton sortByTime = new JRadioButton("时间", true);
+        JRadioButton sortBySize = new JRadioButton("大小", false);
+        JRadioButton sortByName = new JRadioButton("名称", false);
+        sortGroup.add(sortByTime);
+        sortGroup.add(sortBySize);
+        sortGroup.add(sortByName);
+        sortPanel.add(sortByTime);
+        sortPanel.add(sortBySize);
+        sortPanel.add(sortByName);
+        
+        sortByTime.addActionListener(e -> loadBackupList(backupListModel, jarRunner, "time"));
+        sortBySize.addActionListener(e -> loadBackupList(backupListModel, jarRunner, "size"));
+        sortByName.addActionListener(e -> loadBackupList(backupListModel, jarRunner, "name"));
+        
+        JPanel titlePanel = new JPanel(new BorderLayout(5, 5));
+        titlePanel.add(listTitle, BorderLayout.WEST);
+        titlePanel.add(sortPanel, BorderLayout.CENTER);
+        rightPanel.add(titlePanel, BorderLayout.NORTH);
+
+        JList<String> backupList = new JList<>(backupListModel);
+        backupList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        backupList.setFont(new Font(null, Font.PLAIN, 12));
+
+        JScrollPane listScrollPane = new JScrollPane(backupList);
+        listScrollPane.setPreferredSize(new Dimension(400, 280));
+        rightPanel.add(listScrollPane, BorderLayout.CENTER);
+
+        JPanel backupInfoPanel = new JPanel(new BorderLayout(5, 5));
+        backupInfoPanel.setBorder(new EmptyBorder(10, 0, 0, 0));
+        backupInfoArea.setEditable(false);
+        backupInfoArea.setFont(new Font(null, Font.PLAIN, 11));
+        backupInfoArea.setLineWrap(true);
+        backupInfoArea.setWrapStyleWord(true);
+        JScrollPane infoScrollPane = new JScrollPane(backupInfoArea);
+        infoScrollPane.setPreferredSize(new Dimension(400, 80));
+        infoScrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+        backupInfoPanel.add(infoScrollPane, BorderLayout.CENTER);
+        rightPanel.add(backupInfoPanel, BorderLayout.SOUTH);
+
+        backupList.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                String selected = backupList.getSelectedValue();
+                if (selected != null && !selected.isEmpty()) {
+                    if (selected.contains("..") || selected.contains("/") || selected.contains("\\") || 
+                        selected.contains(":") || selected.contains("*") || selected.contains("?") || 
+                        selected.contains("\"") || selected.contains("<") || selected.contains(">") || 
+                        selected.contains("|")) {
+                        backupInfoArea.setText("无效的文件名");
+                        return;
+                    }
+                    
+                    String serverName;
+                    try {
+                        serverName = sanitizeFileName(new File(jarRunner.getJarPath()).getName());
+                    } catch (Exception ex) {
+                        backupInfoArea.setText("无法获取服务端名称");
+                        return;
+                    }
+                    
+                    String backupDirPath = "MSH/backup/" + serverName;
+                    File backupDir = new File(backupDirPath);
+                    
+                    File zipFile = new File(backupDir, selected);
+                    
+                    try {
+                        String canonicalZipPath = zipFile.getCanonicalPath();
+                        String canonicalDirPath = backupDir.getCanonicalPath();
+                        if (!canonicalZipPath.startsWith(canonicalDirPath + File.separator) && 
+                            !canonicalZipPath.equals(canonicalDirPath)) {
+                            backupInfoArea.setText("无效的备份文件");
+                            return;
+                        }
+                    } catch (IOException ex) {
+                        backupInfoArea.setText("无法验证文件路径");
+                        return;
+                    }
+                    
+                    if (zipFile.exists() && zipFile.canRead() && zipFile.length() > 0) {
+                        StringBuilder info = new StringBuilder();
+                        info.append("文件: ").append(selected).append("\n");
+                        info.append("大小: ").append(formatFileSize(zipFile.length())).append("\n");
+                        info.append("备份内容:\n");
+                        try (ZipFile zip = new ZipFile(zipFile)) {
+                            java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+                            int count = 0;
+                            int totalEntries = 0;
+                            while (entries.hasMoreElements()) {
+                                ZipEntry entry = entries.nextElement();
+                                totalEntries++;
+                                if (count < 20) {
+                                    String entryName = entry.getName();
+                                    if (entryName.contains("..") || entryName.startsWith("/") || entryName.startsWith("\\")) {
+                                        info.append("  - [无效条目]\n");
+                                    } else {
+                                        info.append("  - ").append(entryName);
+                                        if (entry.getSize() > 0) {
+                                            info.append(" (").append(formatFileSize(entry.getSize())).append(")");
+                                        }
+                                        info.append("\n");
+                                        count++;
+                                    }
+                                }
+                            }
+                            if (totalEntries > 20) {
+                                info.append("  ... 共 ").append(totalEntries).append(" 个文件/文件夹");
+                            }
+                        } catch (IOException ex) {
+                            info.append("无法读取备份信息: ").append(ex.getMessage());
+                        }
+                        backupInfoArea.setText(info.toString());
+                    } else {
+                        backupInfoArea.setText("备份文件不存在或无法读取");
+                    }
+                }
+            }
+        });
+
+        mainPanel.add(rightPanel, BorderLayout.CENTER);
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton restoreButton = new JButton("恢复备份");
+        JButton deleteButton = new JButton("删除");
+        JButton okButton = new JButton("确定");
+        JButton applyButton = new JButton("应用");
+        JButton cancelButton = new JButton("取消");
+
+        restoreButton.addActionListener(e -> {
+            String selected = backupList.getSelectedValue();
+            if (selected == null || selected.isEmpty()) {
+                JOptionPane.showMessageDialog(dialog, "请先选择一个备份", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            
+            if (selected.contains("..") || selected.contains("/") || selected.contains("\\") || 
+                selected.contains(":") || selected.contains("*") || selected.contains("?") || 
+                selected.contains("\"") || selected.contains("<") || selected.contains(">") || 
+                selected.contains("|")) {
+                JOptionPane.showMessageDialog(dialog, "无效的备份选择", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            int confirm = JOptionPane.showConfirmDialog(dialog,
+                "确定要恢复备份 '" + selected + "' 吗？\n这将覆盖当前服务端的所有文件！",
+                "确认恢复", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+
+            if (confirm == JOptionPane.YES_OPTION) {
+                String serverName = sanitizeFileName(new File(jarRunner.getJarPath()).getName());
+                String backupDirPath = "MSH/backup/" + serverName;
+                int parenIndex = selected.lastIndexOf(" (");
+                String actualFileName = parenIndex > 0 ? selected.substring(0, parenIndex) : selected;
+                
+                if (actualFileName.contains("..") || actualFileName.contains("/") || actualFileName.contains("\\")) {
+                    JOptionPane.showMessageDialog(dialog, "无效的文件名", "错误", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                
+                File backupDir = new File(backupDirPath);
+                File zipFile = new File(backupDir, actualFileName);
+                
+                try {
+                    String canonicalZipPath = zipFile.getCanonicalPath();
+                    String canonicalBackupDir = backupDir.getCanonicalPath();
+                    
+                    if (!canonicalZipPath.startsWith(canonicalBackupDir + File.separator) && 
+                        !canonicalZipPath.equals(canonicalBackupDir)) {
+                        JOptionPane.showMessageDialog(dialog, "无效的备份文件路径", "错误", JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                    
+                    File serverDir = new File(jarRunner.getJarPath()).getParentFile();
+                    if (serverDir == null || !serverDir.exists() || !serverDir.isDirectory()) {
+                        JOptionPane.showMessageDialog(dialog, "服务端目录不存在", "错误", JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                    
+                    if (jarRunner.getStatus() == JarRunner.Status.RUNNING) {
+                        JOptionPane.showMessageDialog(dialog, "请先停止服务器再恢复备份", "提示", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+                    
+                    showRestoreProgressDialog(dialog, jarRunner, actualFileName);
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(dialog, "恢复失败: " + ex.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                    Logger.error("Backup restore failed: " + ex.getMessage(), "Main");
+                }
+            }
+        });
+
+        deleteButton.addActionListener(e -> {
+            String selected = backupList.getSelectedValue();
+            if (selected == null || selected.isEmpty()) {
+                JOptionPane.showMessageDialog(dialog, "请先选择一个备份", "提示", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            
+            if (selected.contains("..") || selected.contains("/") || selected.contains("\\") || 
+                selected.contains(":") || selected.contains("*") || selected.contains("?") || 
+                selected.contains("\"") || selected.contains("<") || selected.contains(">") || 
+                selected.contains("|")) {
+                JOptionPane.showMessageDialog(dialog, "无效的备份选择", "错误", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            
+            int confirm = JOptionPane.showConfirmDialog(dialog,
+                "确定要删除备份 '" + selected + "' 吗？", "确认删除", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+
+            if (confirm == JOptionPane.YES_OPTION) {
+                String serverName = sanitizeFileName(new File(jarRunner.getJarPath()).getName());
+                String backupDirPath = "MSH/backup/" + serverName;
+                int parenIndex = selected.lastIndexOf(" (");
+                String actualFileName = parenIndex > 0 ? selected.substring(0, parenIndex) : selected;
+                
+                if (actualFileName.contains("..") || actualFileName.contains("/") || actualFileName.contains("\\")) {
+                    JOptionPane.showMessageDialog(dialog, "无效的文件名", "错误", JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                
+                File backupDir = new File(backupDirPath);
+                File zipFile = new File(backupDir, actualFileName);
+                
+                try {
+                    String canonicalZipPath = zipFile.getCanonicalPath();
+                    String canonicalBackupDir = backupDir.getCanonicalPath();
+                    
+                    if (!canonicalZipPath.startsWith(canonicalBackupDir + File.separator) && 
+                        !canonicalZipPath.equals(canonicalBackupDir)) {
+                        JOptionPane.showMessageDialog(dialog, "无效的备份文件路径", "错误", JOptionPane.ERROR_MESSAGE);
+                        return;
+                    }
+                    
+                    if (!zipFile.exists()) {
+                        JOptionPane.showMessageDialog(dialog, "备份文件不存在", "错误", JOptionPane.ERROR_MESSAGE);
+                        loadBackupList(backupListModel, jarRunner, "time");
+                        return;
+                    }
+                    
+                    if (zipFile.delete()) {
+                        loadBackupList(backupListModel, jarRunner, "time");
+                        backupInfoArea.setText("");
+                        jarRunner.getOutputPanel().append("[MSH] 备份已删除: " + actualFileName + "\n");
+                        Logger.info("Backup deleted: " + actualFileName, "Main");
+                    } else {
+                        JOptionPane.showMessageDialog(dialog, "删除失败，请检查文件权限", "错误", JOptionPane.ERROR_MESSAGE);
+                        Logger.error("Failed to delete backup: " + actualFileName, "Main");
+                    }
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(dialog, "删除失败: " + ex.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                    Logger.error("Failed to delete backup: " + ex.getMessage(), "Main");
+                }
+            }
+        });
+
+        okButton.addActionListener(e -> {
+            boolean enabled = enableCheckBox.isSelected();
+            int interval = (Integer) intervalSpinner.getValue();
+            int maxCount = (Integer) maxCountSpinner.getValue();
+            int deleteDays = (Integer) deleteDaysSpinner.getValue();
+
+            jarRunner.setBackupEnabled(enabled);
+            jarRunner.setBackupIntervalMinutes(interval);
+            jarRunner.setMaxBackupCount(maxCount);
+            jarRunner.setAutoDeleteDays(deleteDays);
+            saveBackupConfig(jarRunner.getJarPath(), enabled, interval, maxCount, deleteDays);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 备份设置已更新 - 启用: %s, 间隔: %d分钟, 最大条数: %d, 删除天数: %d\n",
+                enabled ? "是" : "否", interval, maxCount, deleteDays));
+            dialog.dispose();
+        });
+
+        applyButton.addActionListener(e -> {
+            boolean enabled = enableCheckBox.isSelected();
+            int interval = (Integer) intervalSpinner.getValue();
+            int maxCount = (Integer) maxCountSpinner.getValue();
+            int deleteDays = (Integer) deleteDaysSpinner.getValue();
+
+            jarRunner.setBackupEnabled(enabled);
+            jarRunner.setBackupIntervalMinutes(interval);
+            jarRunner.setMaxBackupCount(maxCount);
+            jarRunner.setAutoDeleteDays(deleteDays);
+            saveBackupConfig(jarRunner.getJarPath(), enabled, interval, maxCount, deleteDays);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 备份设置已应用 - 启用: %s, 间隔: %d分钟, 最大条数: %d, 删除天数: %d\n",
+                enabled ? "是" : "否", interval, maxCount, deleteDays));
+        });
+
+        cancelButton.addActionListener(e -> dialog.dispose());
+
+        buttonPanel.add(restoreButton);
+        buttonPanel.add(deleteButton);
+        buttonPanel.add(applyButton);
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+        dialog.add(mainPanel);
+        loadBackupList(backupListModel, jarRunner, "time");
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+
+    private void loadBackupList(DefaultListModel<String> model, JarRunner jarRunner, String sortBy) {
+        model.clear();
+        try {
+            String jarPath = jarRunner.getJarPath();
+            if (jarPath == null || jarPath.isEmpty()) {
+                return;
+            }
+            
+            File jarFile = new File(jarPath);
+            if (!jarFile.exists()) {
+                return;
+            }
+            
+            String safeServerName = sanitizeFileName(jarFile.getName());
+            String backupDirPath = "MSH/backup/" + safeServerName;
+            File backupDir = new File(backupDirPath);
+            
+            if (!backupDir.exists() || !backupDir.isDirectory()) {
+                return;
+            }
+            
+            String canonicalBackupDir = backupDir.getCanonicalPath();
+            File[] files = backupDir.listFiles((d, name) -> {
+                if (name == null || name.isEmpty()) return false;
+                if (name.contains("..") || name.contains("/") || name.contains("\\")) return false;
+                return name.toLowerCase().endsWith(".zip");
+            });
+            
+            if (files == null || files.length == 0) {
+                return;
+            }
+            
+            switch (sortBy) {
+                case "size":
+                    Arrays.sort(files, (f1, f2) -> Long.compare(f2.length(), f1.length()));
+                    break;
+                case "name":
+                    Arrays.sort(files, (f1, f2) -> f1.getName().compareToIgnoreCase(f2.getName()));
+                    break;
+                case "time":
+                default:
+                    Arrays.sort(files, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
+                    break;
+            }
+            
+            int maxCount = jarRunner.getMaxBackupCount();
+            int autoDeleteDays = jarRunner.getAutoDeleteDays();
+            long currentTime = System.currentTimeMillis();
+            long deleteTimeThreshold = autoDeleteDays > 0 ? currentTime - (autoDeleteDays * 24L * 60 * 60 * 1000) : 0;
+            
+            List<File> filesToDelete = new ArrayList<>();
+            if (autoDeleteDays > 0) {
+                for (File file : files) {
+                    if (file.lastModified() < deleteTimeThreshold) {
+                        filesToDelete.add(file);
+                    }
+                }
+            }
+            
+            if (files.length > maxCount) {
+                File[] sortedByTime = Arrays.copyOf(files, files.length);
+                Arrays.sort(sortedByTime, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
+                for (int i = maxCount; i < sortedByTime.length; i++) {
+                    if (!filesToDelete.contains(sortedByTime[i])) {
+                        filesToDelete.add(sortedByTime[i]);
+                    }
+                }
+            }
+            
+            for (File fileToDelete : filesToDelete) {
+                try {
+                    String canonicalPath = fileToDelete.getCanonicalPath();
+                    if (canonicalPath.startsWith(canonicalBackupDir + File.separator) && 
+                        fileToDelete.exists() && fileToDelete.canWrite()) {
+                        if (fileToDelete.delete()) {
+                            Logger.info("Auto-deleted old backup: " + fileToDelete.getName(), "Main");
+                        }
+                    }
+                } catch (IOException e) {
+                    Logger.error("Failed to delete backup file: " + fileToDelete.getName(), "Main");
+                }
+            }
+            
+            File[] validFiles = backupDir.listFiles((d, name) -> {
+                if (name == null || name.isEmpty()) return false;
+                if (name.contains("..") || name.contains("/") || name.contains("\\")) return false;
+                return name.toLowerCase().endsWith(".zip");
+            });
+            
+            if (validFiles == null || validFiles.length == 0) {
+                return;
+            }
+            
+            Arrays.sort(validFiles, (f1, f2) -> {
+                switch (sortBy) {
+                    case "size":
+                        return Long.compare(f2.length(), f1.length());
+                    case "name":
+                        return f1.getName().compareToIgnoreCase(f2.getName());
+                    case "time":
+                    default:
+                        return Long.compare(f2.lastModified(), f1.lastModified());
+                }
+            });
+            
+            for (File file : validFiles) {
+                try {
+                    String fileName = file.getName();
+                    if (fileName == null || fileName.isEmpty()) continue;
+                    
+                    String canonicalPath = file.getCanonicalPath();
+                    if (!canonicalPath.startsWith(canonicalBackupDir + File.separator) && 
+                        !canonicalPath.equals(canonicalBackupDir)) {
+                        continue;
+                    }
+                    
+                    if (!file.canRead() || file.length() == 0) {
+                        continue;
+                    }
+                    
+                    String info = fileName + " (" + formatFileSize(file.length()) + ")";
+                    model.addElement(info);
+                } catch (IOException e) {
+                    Logger.error("Failed to validate backup file: " + file.getName(), "Main");
+                }
+            }
+        } catch (Exception e) {
+            Logger.error("Failed to load backup list: " + e.getMessage(), "Main");
+        }
+    }
+
+    private String formatFileSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format("%.1f KB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
+        return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
+    }
+
+    private void extractZip(File zipFile, File destDir) throws IOException {
+        if (!zipFile.exists() || !zipFile.canRead()) {
+            throw new IOException("Backup file does not exist or cannot be read");
+        }
+        
+        if (destDir == null || !destDir.exists()) {
+            throw new IOException("Destination directory does not exist");
+        }
+        
+        try (ZipFile zip = new ZipFile(zipFile)) {
+            java.util.List<ZipEntry> fileEntries = new java.util.ArrayList<>();
+            java.util.List<ZipEntry> dirEntries = new java.util.ArrayList<>();
+            
+            java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                
+                String entryName = entry.getName();
+                if (entryName.contains("..") || entryName.startsWith("/") || entryName.startsWith("\\")) {
+                    continue;
+                }
+                
+                if (entry.isDirectory()) {
+                    dirEntries.add(entry);
+                } else {
+                    fileEntries.add(entry);
+                }
+            }
+            
+            for (ZipEntry dirEntry : dirEntries) {
+                String dirName = dirEntry.getName();
+                File dirFile = new File(destDir, dirName);
+                if (!dirFile.getCanonicalPath().startsWith(destDir.getCanonicalPath())) {
+                    continue;
+                }
+                dirFile.mkdirs();
+            }
+            
+            fileEntries.parallelStream().forEach(entry -> {
+                try {
+                    String entryName = entry.getName();
+                    File file = new File(destDir, entryName);
+                    String canonicalDestDir = destDir.getCanonicalPath();
+                    String canonicalFile = file.getCanonicalPath();
+                    
+                    if (!canonicalFile.startsWith(canonicalDestDir + File.separator) && 
+                        !canonicalFile.equals(canonicalDestDir)) {
+                        return;
+                    }
+                    
+                    file.getParentFile().mkdirs();
+                    try (InputStream is = new BufferedInputStream(zip.getInputStream(entry), 131072);
+                         FileOutputStream fos = new FileOutputStream(file)) {
+                        byte[] buffer = new byte[131072];
+                        int len;
+                        while ((len = is.read(buffer)) > 0) {
+                            fos.write(buffer, 0, len);
+                        }
+                    }
+                } catch (IOException e) {
+                    Logger.error("Failed to extract file: " + entry.getName() + " - " + e.getMessage(), "Main");
+                }
+            });
+        }
+    }
+    
+    private void extractZipWithProgress(File zipFile, File destDir, JProgressBar progressBar, JLabel statusLabel) throws IOException {
+        if (!zipFile.exists() || !zipFile.canRead()) {
+            throw new IOException("Backup file does not exist or cannot be read");
+        }
+        
+        if (destDir == null || !destDir.exists()) {
+            throw new IOException("Destination directory does not exist");
+        }
+        
+        try (ZipFile zip = new ZipFile(zipFile)) {
+            java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+            java.util.List<ZipEntry> allEntries = new java.util.ArrayList<>();
+            while (entries.hasMoreElements()) {
+                allEntries.add(entries.nextElement());
+            }
+            
+            int totalEntries = allEntries.size();
+            java.util.concurrent.atomic.AtomicInteger processedEntries = new java.util.concurrent.atomic.AtomicInteger(0);
+            
+            java.util.List<ZipEntry> dirEntries = new java.util.ArrayList<>();
+            java.util.List<ZipEntry> fileEntries = new java.util.ArrayList<>();
+            
+            for (ZipEntry entry : allEntries) {
+                String entryName = entry.getName();
+                if (entryName.contains("..") || entryName.startsWith("/") || entryName.startsWith("\\")) {
+                    continue;
+                }
+                
+                if (entry.isDirectory()) {
+                    dirEntries.add(entry);
+                } else {
+                    fileEntries.add(entry);
+                }
+            }
+            
+            for (ZipEntry dirEntry : dirEntries) {
+                String dirName = dirEntry.getName();
+                File dirFile = new File(destDir, dirName);
+                if (!dirFile.getCanonicalPath().startsWith(destDir.getCanonicalPath())) {
+                    continue;
+                }
+                dirFile.mkdirs();
+                int currentProgress = processedEntries.incrementAndGet();
+                int progress = (int) ((currentProgress * 100) / totalEntries);
+                progressBar.setValue(Math.min(progress, 100));
+                statusLabel.setText("创建目录: " + dirName);
+            }
+            
+            fileEntries.parallelStream().forEach(entry -> {
+                String entryName = null;
+                synchronized (fileEntries) {
+                    entryName = entry.getName();
+                }
+                try {
+                    File file = new File(destDir, entryName);
+                    String canonicalDestDir = destDir.getCanonicalPath();
+                    String canonicalFile = file.getCanonicalPath();
+                    
+                    if (!canonicalFile.startsWith(canonicalDestDir + File.separator) && 
+                        !canonicalFile.equals(canonicalDestDir)) {
+                        return;
+                    }
+                    
+                    file.getParentFile().mkdirs();
+                    try (InputStream is = new BufferedInputStream(zip.getInputStream(entry), 131072);
+                         FileOutputStream fos = new FileOutputStream(file)) {
+                        byte[] buffer = new byte[131072];
+                        int len;
+                        while ((len = is.read(buffer)) > 0) {
+                            fos.write(buffer, 0, len);
+                        }
+                    }
+                    synchronized (Main.this) {
+                        int currentProgress = processedEntries.incrementAndGet();
+                        int progress = (int) ((currentProgress * 100) / totalEntries);
+                        final int finalProgress = progress;
+                        final String currentEntryName = entryName;
+                        SwingUtilities.invokeLater(() -> {
+                            progressBar.setValue(Math.min(finalProgress, 100));
+                            statusLabel.setText("解压文件: " + currentEntryName);
+                        });
+                    }
+                } catch (IOException e) {
+                    Logger.error("Failed to extract file: " + entryName + " - " + e.getMessage(), "Main");
+                }
+            });
+        }
+    }
+    
+    private void showBackupProgressDialog(JDialog parentDialog, JarRunner jarRunner, DefaultListModel<String> backupListModel) {
+        JDialog progressDialog = new JDialog(frame, "备份中...", true);
+        progressDialog.setLayout(new BorderLayout(15, 15));
+        progressDialog.setSize(400, 150);
+        progressDialog.setLocationRelativeTo(frame);
+        progressDialog.setResizable(false);
+
+        JPanel contentPanel = new JPanel(new BorderLayout(15, 15));
+        contentPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
+
+        JLabel statusLabel = new JLabel("正在备份...");
+        statusLabel.setFont(new Font(null, Font.PLAIN, 12));
+
+        JProgressBar progressBar = new JProgressBar(0, 100);
+        progressBar.setStringPainted(true);
+        progressBar.setIndeterminate(true);
+
+        contentPanel.add(statusLabel, BorderLayout.NORTH);
+        contentPanel.add(progressBar, BorderLayout.CENTER);
+
+        JButton cancelButton = new JButton("取消");
+        cancelButton.addActionListener(e -> {
+            jarRunner.stopBackupTimerThread();
+            progressDialog.dispose();
+        });
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        buttonPanel.add(cancelButton);
+        contentPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+        progressDialog.add(contentPanel);
+        progressDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+
+        jarRunner.setBackupCallback(new JarRunner.BackupCallback() {
+            @Override
+            public void onBackupComplete(String zipPath, boolean success) {
+                SwingUtilities.invokeLater(() -> {
+                    progressDialog.dispose();
+                    loadBackupList(backupListModel, jarRunner, "time");
+                    if (parentDialog.isVisible()) {
+                        parentDialog.toFront();
+                        parentDialog.repaint();
+                    }
+                });
+            }
+        });
+
+        Thread backupThread = new Thread(() -> {
+            jarRunner.triggerBackup();
+        });
+        backupThread.start();
+
+        progressDialog.setVisible(true);
+    }
+    
+    private void showRestoreProgressDialog(JDialog parentDialog, JarRunner jarRunner, String backupFileName) {
+        JDialog progressDialog = new JDialog(frame, "恢复备份中...", true);
+        progressDialog.setLayout(new BorderLayout(15, 15));
+        progressDialog.setSize(400, 150);
+        progressDialog.setLocationRelativeTo(frame);
+        progressDialog.setResizable(false);
+
+        JPanel contentPanel = new JPanel(new BorderLayout(15, 15));
+        contentPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
+
+        JLabel statusLabel = new JLabel("正在解压文件...");
+        statusLabel.setFont(new Font(null, Font.PLAIN, 12));
+
+        JProgressBar progressBar = new JProgressBar(0, 100);
+        progressBar.setStringPainted(true);
+        progressBar.setIndeterminate(true);
+
+        contentPanel.add(statusLabel, BorderLayout.NORTH);
+        contentPanel.add(progressBar, BorderLayout.CENTER);
+
+        JButton cancelButton = new JButton("取消");
+        final boolean[] cancelled = {false};
+        cancelButton.addActionListener(e -> {
+            cancelled[0] = true;
+            progressDialog.dispose();
+        });
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        buttonPanel.add(cancelButton);
+        contentPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+        progressDialog.add(contentPanel);
+        progressDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+
+        Thread restoreThread = new Thread(() -> {
+            try {
+                String serverName = sanitizeFileName(new File(jarRunner.getJarPath()).getName());
+                String backupDirPath = "MSH/backup/" + serverName;
+                File backupDir = new File(backupDirPath);
+                File zipFile = new File(backupDir, backupFileName);
+                File serverDir = new File(jarRunner.getJarPath()).getParentFile();
+
+                extractZipWithProgress(zipFile, serverDir, progressBar, statusLabel);
+
+                SwingUtilities.invokeLater(() -> {
+                    progressDialog.dispose();
+                    jarRunner.getOutputPanel().append("[MSH] 备份已恢复: " + backupFileName + "\n");
+                    Logger.info("Backup restored successfully: " + backupFileName, "Main");
+                    JOptionPane.showMessageDialog(parentDialog, "备份恢复成功！", "成功", JOptionPane.INFORMATION_MESSAGE);
+                    if (parentDialog.isVisible()) {
+                        parentDialog.toFront();
+                        parentDialog.repaint();
+                    }
+                });
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    progressDialog.dispose();
+                    JOptionPane.showMessageDialog(parentDialog, "恢复失败: " + ex.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+                    Logger.error("Backup restore failed: " + ex.getMessage(), "Main");
+                });
+            }
+        });
+        restoreThread.start();
+
+        progressDialog.setVisible(true);
+    }
+    
     private void handleWindowClosing() {
         Logger.info("Application shutdown initiated", "Main");
         Logger.info("Stop signal sent to all servers", "Main");
@@ -955,7 +1806,7 @@ public class Main {
         String currentName = jarRunner.getDisplayName();
         String jarFileName = new File(jarRunner.getJarPath()).getName();
         
-        JDialog renameDialog = new JDialog(frame, "重命名标签页", true);
+        JDialog renameDialog = new JDialog(frame, "重命名标签页", false);
         renameDialog.setLayout(new BorderLayout(15, 15));
         renameDialog.setSize(400, 180);
         renameDialog.setLocationRelativeTo(frame);
@@ -1143,6 +1994,14 @@ public class Main {
             jarRunner.setAutoRestartEnabled((Boolean) guardConfig[0]);
             jarRunner.setForceKeepAlive((Boolean) guardConfig[1]);
             jarRunner.setRestartSettings((Integer) guardConfig[2], (Integer) guardConfig[3]);
+        }
+
+        Object[] backupConfig = loadBackupConfig(jarPath);
+        if (backupConfig != null) {
+            jarRunner.setBackupEnabled((Boolean) backupConfig[0]);
+            jarRunner.setBackupIntervalMinutes((Integer) backupConfig[1]);
+            jarRunner.setMaxBackupCount((Integer) backupConfig[2]);
+            jarRunner.setAutoDeleteDays((Integer) backupConfig[3]);
         }
 
         jarRunners.add(jarRunner);
@@ -1378,6 +2237,10 @@ public class Main {
         JButton guardSettingsButton = new JButton("进程守护设置");
         JButton networkAddressButton = new JButton("查看地址");
         JButton gameRuleButton = new JButton("游戏规则");
+        JButton backupSettingsButton = new JButton("备份设置");
+        backupSettingsButton.addActionListener(a -> {
+            showBackupSettingsDialog(jarRunner);
+        });
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
         forceStopButton.setEnabled(false);
@@ -1445,6 +2308,7 @@ public class Main {
         controlPanel.add(guardSettingsButton);
         controlPanel.add(networkAddressButton);
         controlPanel.add(gameRuleButton);
+        controlPanel.add(backupSettingsButton);
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.add(controlPanel, BorderLayout.NORTH);
         bottomPanel.add(commandPanel, BorderLayout.CENTER);

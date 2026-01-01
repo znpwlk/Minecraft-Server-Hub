@@ -1,7 +1,7 @@
 import javax.swing.*;
- import javax.swing.border.EmptyBorder;
- import java.awt.*;
- import java.io.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;

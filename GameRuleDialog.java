@@ -4,6 +4,7 @@ import java.awt.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class GameRuleDialog extends JDialog {
     private final JarRunner jarRunner;
@@ -12,11 +13,13 @@ public class GameRuleDialog extends JDialog {
     private JLabel statusLabel;
     private int loadedRulesCount = 0;
     private int totalRulesToLoad = 0;
-    private boolean serverAvailable = false;
+    private volatile boolean serverAvailable = false;
     private final Map<String, String> currentRuleValues = new HashMap<>();
+    private final AtomicBoolean isDisposed = new AtomicBoolean(false);
+    private final AtomicBoolean isLoading = new AtomicBoolean(false);
 
     public static boolean showDialog(JFrame parent, JarRunner jarRunner) {
-        if (jarRunner.getStatus() != JarRunner.Status.RUNNING) {
+        if (jarRunner == null || jarRunner.getStatus() != JarRunner.Status.RUNNING) {
             JOptionPane.showMessageDialog(parent,
                 "服务器未运行，无法调整游戏规则",
                 "无法操作",
@@ -24,83 +27,137 @@ public class GameRuleDialog extends JDialog {
             return false;
         }
 
-        new GameRuleDialog(parent, jarRunner).setVisible(true);
-        return true;
+        try {
+            GameRuleDialog dialog = new GameRuleDialog(parent, jarRunner);
+            dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+            dialog.setVisible(true);
+            return true;
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(parent,
+                "打开游戏规则窗口失败: " + e.getMessage(),
+                "错误",
+                JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
     }
 
     public GameRuleDialog(JFrame parent, JarRunner jarRunner) {
         super(parent, "游戏规则调整", true);
+        if (jarRunner == null) {
+            throw new IllegalArgumentException("JarRunner cannot be null");
+        }
         this.jarRunner = jarRunner;
-        jarRunner.setGameRuleCallback(this::handleGameRuleValue);
+        try {
+            jarRunner.setGameRuleCallback(this::handleGameRuleValue);
+        } catch (Exception e) {
+        }
         initUI();
         checkServerAndLoadRules();
     }
 
+    @Override
+    public void dispose() {
+        if (isDisposed.getAndSet(true)) {
+            return;
+        }
+        try {
+            if (jarRunner != null) {
+                jarRunner.setGameRuleCallback(null);
+            }
+            ruleComponents.clear();
+            rulesMap.clear();
+            currentRuleValues.clear();
+        } catch (Exception e) {
+        }
+        super.dispose();
+    }
+
     private void handleGameRuleValue(String ruleName, String value) {
+        if (isDisposed.get() || ruleName == null || value == null) {
+            return;
+        }
         javax.swing.SwingUtilities.invokeLater(() -> {
             updateRuleValue(ruleName, value);
         });
     }
 
     private void initUI() {
-        setLayout(new BorderLayout());
-        setSize(500, 650);
-        setLocationRelativeTo(getParent());
-        setResizable(true);
+        try {
+            setLayout(new BorderLayout());
+            setSize(500, 650);
+            setLocationRelativeTo(getParent());
+            setResizable(true);
 
-        JPanel mainPanel = new JPanel(new BorderLayout());
-        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
+            JPanel mainPanel = new JPanel(new BorderLayout());
+            mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
 
-        JPanel titlePanel = new JPanel(new BorderLayout());
-        JLabel titleLabel = new JLabel("游戏规则调整");
-        titleLabel.setFont(new Font(null, Font.BOLD, 18));
-        titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        titlePanel.add(titleLabel, BorderLayout.CENTER);
+            JPanel titlePanel = new JPanel(new BorderLayout());
+            JLabel titleLabel = new JLabel("游戏规则调整");
+            titleLabel.setFont(new Font(null, Font.BOLD, 18));
+            titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
+            titlePanel.add(titleLabel, BorderLayout.CENTER);
 
-        JPanel statusPanel = new JPanel(new BorderLayout());
-        statusPanel.setBorder(new EmptyBorder(5, 0, 0, 0));
-        statusLabel = new JLabel("正在查询服务器...");
-        statusLabel.setFont(new Font(null, Font.PLAIN, 12));
-        statusPanel.add(statusLabel, BorderLayout.CENTER);
-        titlePanel.add(statusPanel, BorderLayout.SOUTH);
+            JPanel statusPanel = new JPanel(new BorderLayout());
+            statusPanel.setBorder(new EmptyBorder(5, 0, 0, 0));
+            statusLabel = new JLabel("正在查询服务器...");
+            statusLabel.setFont(new Font(null, Font.PLAIN, 12));
+            statusPanel.add(statusLabel, BorderLayout.CENTER);
+            titlePanel.add(statusPanel, BorderLayout.SOUTH);
 
-        mainPanel.add(titlePanel, BorderLayout.NORTH);
+            mainPanel.add(titlePanel, BorderLayout.NORTH);
 
-        JPanel rulesPanel = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(4, 4, 4, 4);
-        gbc.anchor = GridBagConstraints.WEST;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.weightx = 1.0;
+            JPanel rulesPanel = new JPanel(new GridBagLayout());
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(4, 4, 4, 4);
+            gbc.anchor = GridBagConstraints.WEST;
+            gbc.fill = GridBagConstraints.HORIZONTAL;
+            gbc.weightx = 1.0;
 
-        List<GameRuleConfig.GameRule> rules = GameRuleConfig.getGameRules();
-        int row = 0;
+            List<GameRuleConfig.GameRule> rules = GameRuleConfig.getGameRules();
+            if (rules != null) {
+                int row = 0;
+                for (GameRuleConfig.GameRule rule : rules) {
+                    if (rule == null || rule.getName() == null) continue;
+                    try {
+                        JPanel rulePanel = createRulePanel(rule);
+                        if (rulePanel != null) {
+                            gbc.gridx = 0;
+                            gbc.gridy = row;
+                            rulesPanel.add(rulePanel, gbc);
+                            row++;
+                            rulesMap.put(rule.getName(), rule);
+                        }
+                    } catch (Exception e) {
+                    }
+                }
+                totalRulesToLoad = row;
+            }
 
-        for (GameRuleConfig.GameRule rule : rules) {
-            JPanel rulePanel = createRulePanel(rule);
-            gbc.gridx = 0;
-            gbc.gridy = row;
-            rulesPanel.add(rulePanel, gbc);
-            row++;
-            rulesMap.put(rule.getName(), rule);
+            JScrollPane scrollPane = new JScrollPane(rulesPanel);
+            scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+            mainPanel.add(scrollPane, BorderLayout.CENTER);
+
+            JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+            JButton refreshButton = new JButton("刷新状态");
+            JButton closeButton = new JButton("关闭");
+
+            refreshButton.addActionListener(e -> {
+                if (!isDisposed.get() && !isLoading.getAndSet(true)) {
+                    checkServerAndLoadRules();
+                    isLoading.set(false);
+                }
+            });
+            closeButton.addActionListener(e -> dispose());
+
+            buttonPanel.add(refreshButton);
+            buttonPanel.add(closeButton);
+            mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+
+            add(mainPanel);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "初始化界面失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+            dispose();
         }
-
-        JScrollPane scrollPane = new JScrollPane(rulesPanel);
-        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        mainPanel.add(scrollPane, BorderLayout.CENTER);
-
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JButton refreshButton = new JButton("刷新状态");
-        JButton closeButton = new JButton("关闭");
-
-        refreshButton.addActionListener(e -> checkServerAndLoadRules());
-        closeButton.addActionListener(e -> dispose());
-
-        buttonPanel.add(refreshButton);
-        buttonPanel.add(closeButton);
-        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
-
-        add(mainPanel);
     }
 
     private JPanel createRulePanel(GameRuleConfig.GameRule rule) {
