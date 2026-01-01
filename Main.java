@@ -10,7 +10,7 @@ import java.util.Properties;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 public class Main {
-    public static final String VERSION = "1.1.0";
+    public static final String VERSION = "1.1.1";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
