@@ -10,7 +10,7 @@ import java.util.Properties;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 public class Main {
-    public static final String VERSION = "1.1.1";
+    public static final String VERSION = "1.1.2";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -23,6 +23,7 @@ public class Main {
     private JTextArea logTextArea;
     private List<TabLabel> tabLabels = new ArrayList<>();
     private UpdateManager updateManager;
+    private File mshDir;
     
     private static class TabLabel extends JPanel {
         private JLabel label;
@@ -192,7 +193,7 @@ public class Main {
         instance = this;
         Logger.info("Application started", "Main");
         config = new Properties();
-        File mshDir = new File("MSH");
+        mshDir = new File("MSH");
         if (!mshDir.exists()) {
             mshDir.mkdirs();
         }
@@ -999,6 +1000,14 @@ public class Main {
             if (jarRunner.isBackingUp()) {
                 return;
             }
+            if (jarRunner.getStatus() == JarRunner.Status.RUNNING || 
+                jarRunner.getStatus() == JarRunner.Status.STARTING ||
+                jarRunner.getStatus() == JarRunner.Status.STOPPING) {
+                JOptionPane.showMessageDialog(dialog, 
+                    "服务器正在运行中，无法进行备份。\n请先停止服务器后再进行备份操作。", 
+                    "无法备份", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
             showBackupProgressDialog(dialog, jarRunner, backupListModel);
         });
         gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 1;
@@ -1016,7 +1025,7 @@ public class Main {
 
         JPanel infoPanel = new JPanel(new BorderLayout(5, 5));
         infoPanel.setBorder(new EmptyBorder(10, 0, 0, 0));
-        JTextArea infoText = new JTextArea("备份目录: MSH/backup/服务端名称/\n备份包含服务端文件夹内的所有文件");
+        JTextArea infoText = new JTextArea("备份目录: MSH/backup/服务端名称/\n备份包含服务端文件夹内的所有文件\n\n注意: 由于技术限制，服务器运行时无法正常备份\n请先停止服务器后再进行备份操作");
         infoText.setEditable(false);
         infoText.setOpaque(false);
         infoText.setFont(new Font(null, Font.PLAIN, 11));
@@ -1329,6 +1338,136 @@ public class Main {
         dialog.setLocationRelativeTo(frame);
         dialog.setVisible(true);
     }
+    
+    private void showOtherSettingsDialog(JarRunner jarRunner) {
+        JDialog dialog = new JDialog(frame, "其他设置 - " + new File(jarRunner.getJarPath()).getName(), false);
+        dialog.setLayout(new BorderLayout(20, 20));
+        dialog.setSize(480, 380);
+        dialog.setLocationRelativeTo(frame);
+        dialog.setResizable(true);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(15, 15));
+        mainPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
+        
+        JPanel topPanel = new JPanel(new BorderLayout());
+        JLabel titleLabel = new JLabel("其他设置");
+        titleLabel.setFont(new Font(null, Font.BOLD, 18));
+        titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        topPanel.add(titleLabel, BorderLayout.CENTER);
+        mainPanel.add(topPanel, BorderLayout.NORTH);
+        
+        JPanel settingsPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(10, 10, 10, 10);
+        gbc.anchor = GridBagConstraints.WEST;
+        
+        JLabel useNoGuiLabel = new JLabel("是否没有图形化启动，如果低版本其中有问题，尝试关闭这个选项:");
+        JCheckBox useNoGuiCheckBox = new JCheckBox();
+        useNoGuiCheckBox.setSelected(jarRunner.isUseNoGui());
+        
+        gbc.gridx = 0; gbc.gridy = 0;
+        settingsPanel.add(useNoGuiLabel, gbc);
+        gbc.gridx = 1;
+        settingsPanel.add(useNoGuiCheckBox, gbc);
+        
+        JTextArea infoText = new JTextArea("设置说明：\n\n" +
+            "--nogui参数: 用于禁用服务器的图形界面。部分旧版本服务端不支持此参数。");
+        infoText.setEditable(false);
+        infoText.setOpaque(false);
+        infoText.setFont(new Font(null, Font.PLAIN, 12));
+        infoText.setWrapStyleWord(true);
+        infoText.setLineWrap(true);
+        
+        JScrollPane scrollPane = new JScrollPane(infoText);
+        scrollPane.setBorder(new EmptyBorder(10, 0, 0, 0));
+        scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        scrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scrollPane.setMinimumSize(new Dimension(400, 120));
+        
+        JPanel centerPanel = new JPanel(new BorderLayout(10, 10));
+        centerPanel.add(settingsPanel, BorderLayout.NORTH);
+        centerPanel.add(scrollPane, BorderLayout.CENTER);
+        mainPanel.add(centerPanel, BorderLayout.CENTER);
+        
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton okButton = new JButton("确定");
+        JButton cancelButton = new JButton("取消");
+        JButton applyButton = new JButton("应用");
+        
+        okButton.addActionListener(e -> {
+            boolean useNoGui = useNoGuiCheckBox.isSelected();
+            jarRunner.setUseNoGui(useNoGui);
+            saveOtherConfig(jarRunner.getJarPath(), useNoGui);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 其他设置已更新 - 使用--nogui参数: %s\n", 
+                useNoGui ? "是" : "否"));
+            dialog.dispose();
+        });
+        
+        applyButton.addActionListener(e -> {
+            boolean useNoGui = useNoGuiCheckBox.isSelected();
+            jarRunner.setUseNoGui(useNoGui);
+            saveOtherConfig(jarRunner.getJarPath(), useNoGui);
+            jarRunner.getOutputPanel().append(String.format("[MSH] 其他设置已应用 - 使用--nogui参数: %s\n", 
+                useNoGui ? "是" : "否"));
+        });
+        
+        cancelButton.addActionListener(e -> dialog.dispose());
+        
+        buttonPanel.add(applyButton);
+        buttonPanel.add(okButton);
+        buttonPanel.add(cancelButton);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        
+        dialog.add(mainPanel);
+        dialog.pack();
+        dialog.setLocationRelativeTo(frame);
+        dialog.setVisible(true);
+    }
+    
+    private void saveOtherConfig(String jarPath, boolean useNoGui) {
+        try {
+            Properties props = new Properties();
+            File configFile = new File(mshDir, "server_manager_config.properties");
+            if (configFile.exists()) {
+                try (FileInputStream fis = new FileInputStream(configFile)) {
+                    props.load(fis);
+                }
+            }
+            
+            String safeJarName = sanitizeFileName(new File(jarPath).getName());
+            props.setProperty("other.useNoGui." + safeJarName, String.valueOf(useNoGui));
+            
+            try (FileOutputStream fos = new FileOutputStream(configFile)) {
+                props.store(fos, "Server Manager Config");
+            }
+        } catch (IOException e) {
+            Logger.error("Failed to save other config: " + e.getMessage(), "Main");
+        }
+    }
+    
+    private boolean loadOtherConfig(String jarPath) {
+        boolean useNoGui = true;
+        try {
+            Properties props = new Properties();
+            File configFile = new File(mshDir, "server_manager_config.properties");
+            if (!configFile.exists()) {
+                return useNoGui;
+            }
+            
+            try (FileInputStream fis = new FileInputStream(configFile)) {
+                props.load(fis);
+            }
+            
+            String safeJarName = sanitizeFileName(new File(jarPath).getName());
+            String useNoGuiStr = props.getProperty("other.useNoGui." + safeJarName);
+            if (useNoGuiStr != null) {
+                useNoGui = Boolean.parseBoolean(useNoGuiStr);
+            }
+        } catch (IOException e) {
+            Logger.error("Failed to load other config: " + e.getMessage(), "Main");
+        }
+        return useNoGui;
+    }
 
     private void loadBackupList(DefaultListModel<String> model, JarRunner jarRunner, String sortBy) {
         model.clear();
@@ -1468,72 +1607,6 @@ public class Main {
         return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
     }
 
-    private void extractZip(File zipFile, File destDir) throws IOException {
-        if (!zipFile.exists() || !zipFile.canRead()) {
-            throw new IOException("Backup file does not exist or cannot be read");
-        }
-        
-        if (destDir == null || !destDir.exists()) {
-            throw new IOException("Destination directory does not exist");
-        }
-        
-        try (ZipFile zip = new ZipFile(zipFile)) {
-            java.util.List<ZipEntry> fileEntries = new java.util.ArrayList<>();
-            java.util.List<ZipEntry> dirEntries = new java.util.ArrayList<>();
-            
-            java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
-            while (entries.hasMoreElements()) {
-                ZipEntry entry = entries.nextElement();
-                
-                String entryName = entry.getName();
-                if (entryName.contains("..") || entryName.startsWith("/") || entryName.startsWith("\\")) {
-                    continue;
-                }
-                
-                if (entry.isDirectory()) {
-                    dirEntries.add(entry);
-                } else {
-                    fileEntries.add(entry);
-                }
-            }
-            
-            for (ZipEntry dirEntry : dirEntries) {
-                String dirName = dirEntry.getName();
-                File dirFile = new File(destDir, dirName);
-                if (!dirFile.getCanonicalPath().startsWith(destDir.getCanonicalPath())) {
-                    continue;
-                }
-                dirFile.mkdirs();
-            }
-            
-            fileEntries.parallelStream().forEach(entry -> {
-                try {
-                    String entryName = entry.getName();
-                    File file = new File(destDir, entryName);
-                    String canonicalDestDir = destDir.getCanonicalPath();
-                    String canonicalFile = file.getCanonicalPath();
-                    
-                    if (!canonicalFile.startsWith(canonicalDestDir + File.separator) && 
-                        !canonicalFile.equals(canonicalDestDir)) {
-                        return;
-                    }
-                    
-                    file.getParentFile().mkdirs();
-                    try (InputStream is = new BufferedInputStream(zip.getInputStream(entry), 131072);
-                         FileOutputStream fos = new FileOutputStream(file)) {
-                        byte[] buffer = new byte[131072];
-                        int len;
-                        while ((len = is.read(buffer)) > 0) {
-                            fos.write(buffer, 0, len);
-                        }
-                    }
-                } catch (IOException e) {
-                    Logger.error("Failed to extract file: " + entry.getName() + " - " + e.getMessage(), "Main");
-                }
-            });
-        }
-    }
-    
     private void extractZipWithProgress(File zipFile, File destDir, JProgressBar progressBar, JLabel statusLabel) throws IOException {
         if (!zipFile.exists() || !zipFile.canRead()) {
             throw new IOException("Backup file does not exist or cannot be read");
@@ -2003,7 +2076,10 @@ public class Main {
             jarRunner.setMaxBackupCount((Integer) backupConfig[2]);
             jarRunner.setAutoDeleteDays((Integer) backupConfig[3]);
         }
-
+        
+        boolean useNoGui = loadOtherConfig(jarPath);
+        jarRunner.setUseNoGui(useNoGui);
+        
         jarRunners.add(jarRunner);
         
         String customName = loadCustomName(jarPath);
@@ -2035,6 +2111,7 @@ public class Main {
         JButton sendCommandButton = new JButton("发送命令");
         JComboBox<String> quickCommandComboBox = new JComboBox<>();
         quickCommandComboBox.setEditable(false);
+        
         String[] quickCommands = {
             "选择快捷指令",
             "--- OP管理 ---",
@@ -2135,20 +2212,6 @@ public class Main {
                         finalCmd = "pardon " + pardonPlayer.trim();
                     }
                     break;
-                case "封禁IP":
-                    String banIp = JOptionPane.showInputDialog(serverPanel, "请输入要封禁的IP地址:", "封禁IP", JOptionPane.QUESTION_MESSAGE);
-                    if (banIp != null && !banIp.trim().isEmpty()) {
-                        String banIpReason = JOptionPane.showInputDialog(serverPanel, "请输入封禁原因:", "封禁原因", JOptionPane.QUESTION_MESSAGE);
-                        if (banIpReason == null) banIpReason = "";
-                        finalCmd = "ban-ip " + banIp.trim() + " " + banIpReason.trim();
-                    }
-                    break;
-                case "解禁IP":
-                    String pardonIp = JOptionPane.showInputDialog(serverPanel, "请输入要解禁的IP地址:", "解禁IP", JOptionPane.QUESTION_MESSAGE);
-                    if (pardonIp != null && !pardonIp.trim().isEmpty()) {
-                        finalCmd = "pardon-ip " + pardonIp.trim();
-                    }
-                    break;
                 case "直接发言":
                     String message = JOptionPane.showInputDialog(serverPanel, "请输入要发送的消息:", "直接发言", JOptionPane.QUESTION_MESSAGE);
                     if (message != null && !message.trim().isEmpty()) {
@@ -2227,19 +2290,34 @@ public class Main {
         commandInputPanel.add(commandField, BorderLayout.CENTER);
         commandPanel.add(commandInputPanel, BorderLayout.CENTER);
         commandPanel.add(sendCommandButton, BorderLayout.EAST);
-        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JPanel controlPanel = new JPanel(new GridLayout(2, 5, 5, 2));
         JButton startButton = new JButton("启动服务器");
+        startButton.setMaximumSize(new Dimension(120, 25));
         JButton stopButton = new JButton("关闭服务器");
+        stopButton.setMaximumSize(new Dimension(120, 25));
         JButton forceStopButton = new JButton("强制关闭");
+        forceStopButton.setMaximumSize(new Dimension(120, 25));
         JButton restartButton = new JButton("重启服务器");
+        restartButton.setMaximumSize(new Dimension(120, 25));
         JButton reloadButton = new JButton("重载服务器");
+        reloadButton.setMaximumSize(new Dimension(120, 25));
         JButton configButton = new JButton("配置管理");
+        configButton.setMaximumSize(new Dimension(120, 25));
         JButton guardSettingsButton = new JButton("进程守护设置");
+        guardSettingsButton.setMaximumSize(new Dimension(120, 25));
         JButton networkAddressButton = new JButton("查看地址");
+        networkAddressButton.setMaximumSize(new Dimension(120, 25));
         JButton gameRuleButton = new JButton("游戏规则");
+        gameRuleButton.setMaximumSize(new Dimension(120, 25));
         JButton backupSettingsButton = new JButton("备份设置");
+        backupSettingsButton.setMaximumSize(new Dimension(120, 25));
         backupSettingsButton.addActionListener(a -> {
             showBackupSettingsDialog(jarRunner);
+        });
+        JButton otherSettingsButton = new JButton("其他设置");
+        otherSettingsButton.setMaximumSize(new Dimension(120, 25));
+        otherSettingsButton.addActionListener(a -> {
+            showOtherSettingsDialog(jarRunner);
         });
         startButton.setEnabled(true);
         stopButton.setEnabled(false);
@@ -2309,6 +2387,7 @@ public class Main {
         controlPanel.add(networkAddressButton);
         controlPanel.add(gameRuleButton);
         controlPanel.add(backupSettingsButton);
+        controlPanel.add(otherSettingsButton);
         JPanel bottomPanel = new JPanel(new BorderLayout());
         bottomPanel.add(controlPanel, BorderLayout.NORTH);
         bottomPanel.add(commandPanel, BorderLayout.CENTER);

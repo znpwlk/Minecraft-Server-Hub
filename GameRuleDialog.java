@@ -11,6 +11,7 @@ public class GameRuleDialog extends JDialog {
     private final Map<String, JComponent> ruleComponents = new HashMap<>();
     private final Map<String, GameRuleConfig.GameRule> rulesMap = new HashMap<>();
     private JLabel statusLabel;
+    private JComboBox<GameRuleConfig.MCVersion> versionComboBox;
     private int loadedRulesCount = 0;
     private int totalRulesToLoad = 0;
     private volatile boolean serverAvailable = false;
@@ -84,18 +85,43 @@ public class GameRuleDialog extends JDialog {
     private void initUI() {
         try {
             setLayout(new BorderLayout());
-            setSize(500, 650);
+            setSize(520, 680);
             setLocationRelativeTo(getParent());
             setResizable(true);
 
             JPanel mainPanel = new JPanel(new BorderLayout());
             mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
 
-            JPanel titlePanel = new JPanel(new BorderLayout());
+            JPanel titlePanel = new JPanel(new BorderLayout(10, 10));
+
+            JPanel titleLabelPanel = new JPanel(new BorderLayout());
             JLabel titleLabel = new JLabel("游戏规则调整");
             titleLabel.setFont(new Font(null, Font.BOLD, 18));
             titleLabel.setHorizontalAlignment(SwingConstants.CENTER);
-            titlePanel.add(titleLabel, BorderLayout.CENTER);
+            titleLabelPanel.add(titleLabel, BorderLayout.CENTER);
+
+            JPanel versionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+            JLabel versionLabel = new JLabel("MC版本:");
+            versionLabel.setFont(new Font(null, Font.PLAIN, 12));
+            versionPanel.add(versionLabel);
+
+            versionComboBox = new JComboBox<>();
+            versionComboBox.setFont(new Font(null, Font.PLAIN, 12));
+            for (GameRuleConfig.MCVersion version : GameRuleConfig.getAvailableVersions()) {
+                versionComboBox.addItem(version);
+            }
+            versionComboBox.setSelectedItem(GameRuleConfig.getCurrentVersion());
+            versionComboBox.addActionListener(e -> {
+                GameRuleConfig.MCVersion selectedVersion = (GameRuleConfig.MCVersion) versionComboBox.getSelectedItem();
+                if (selectedVersion != null && selectedVersion != GameRuleConfig.getCurrentVersion()) {
+                    GameRuleConfig.setCurrentVersion(selectedVersion);
+                    reloadRules();
+                }
+            });
+            versionPanel.add(versionComboBox);
+
+            titlePanel.add(titleLabelPanel, BorderLayout.NORTH);
+            titlePanel.add(versionPanel, BorderLayout.SOUTH);
 
             JPanel statusPanel = new JPanel(new BorderLayout());
             statusPanel.setBorder(new EmptyBorder(5, 0, 0, 0));
@@ -127,7 +153,7 @@ public class GameRuleDialog extends JDialog {
                             row++;
                             rulesMap.put(rule.getName(), rule);
                         }
-                    } catch (Exception e) {
+                    } catch (Exception ex) {
                     }
                 }
                 totalRulesToLoad = row;
@@ -158,6 +184,18 @@ public class GameRuleDialog extends JDialog {
             JOptionPane.showMessageDialog(this, "初始化界面失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
             dispose();
         }
+    }
+
+    private void reloadRules() {
+        ruleComponents.clear();
+        rulesMap.clear();
+        currentRuleValues.clear();
+        getContentPane().removeAll();
+        loadedRulesCount = 0;
+        initUI();
+        revalidate();
+        repaint();
+        checkServerAndLoadRules();
     }
 
     private JPanel createRulePanel(GameRuleConfig.GameRule rule) {
@@ -215,7 +253,7 @@ public class GameRuleDialog extends JDialog {
         totalRulesToLoad = GameRuleConfig.getGameRules().size();
         loadedRulesCount = 0;
         statusLabel.setText("正在查询服务器...");
-        jarRunner.getOutputPanel().append("[MSH] 正在查询游戏规则...\n");
+        jarRunner.getOutputPanel().append("[MSH] 正在查询游戏规则 (MC " + GameRuleConfig.getCurrentVersion().getDisplayName() + ")...\n");
         for (GameRuleConfig.GameRule rule : GameRuleConfig.getGameRules()) {
             jarRunner.sendCommand("gamerule " + rule.getName());
         }
@@ -223,7 +261,34 @@ public class GameRuleDialog extends JDialog {
 
     public void updateRuleValue(String ruleName, String value) {
         GameRuleConfig.GameRule rule = rulesMap.get(ruleName);
-        if (rule == null) return;
+        if (rule == null) {
+            GameRuleConfig.GameRule allVersionRule = GameRuleConfig.findByNameInAllVersions(ruleName);
+            if (allVersionRule != null) {
+                rule = allVersionRule;
+                rulesMap.put(ruleName, rule);
+                JPanel rulesParent = (JPanel) ((JScrollPane) getContentPane().getComponent(0)).getViewport().getView();
+                if (rulesParent instanceof JPanel) {
+                    GridBagLayout layout = (GridBagLayout) rulesParent.getLayout();
+                    int row = rulesMap.size() - 1;
+                    JPanel rulePanel = createRulePanel(rule);
+                    if (rulePanel != null) {
+                        GridBagConstraints gbc = new GridBagConstraints();
+                        gbc.insets = new Insets(4, 4, 4, 4);
+                        gbc.anchor = GridBagConstraints.WEST;
+                        gbc.fill = GridBagConstraints.HORIZONTAL;
+                        gbc.weightx = 1.0;
+                        gbc.gridx = 0;
+                        gbc.gridy = row;
+                        rulesParent.add(rulePanel, gbc);
+                        totalRulesToLoad++;
+                        rulesParent.revalidate();
+                        rulesParent.repaint();
+                    }
+                }
+            } else {
+                return;
+            }
+        }
 
         JComponent component = ruleComponents.get(ruleName);
         if (component == null) return;

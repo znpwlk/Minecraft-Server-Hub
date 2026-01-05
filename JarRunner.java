@@ -52,6 +52,7 @@ public class JarRunner {
     private BackupCallback backupCallback;
     private volatile long lastBackupTime;
     private volatile boolean isBackingUp = false;
+    private boolean useNoGui;
     
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
         this.jarPath = jarPath;
@@ -70,6 +71,7 @@ public class JarRunner {
         this.autoDeleteDays = 30;
         this.lastBackupTime = 0;
         this.stopBackupTimer = false;
+        this.useNoGui = true;
         startHourlyResetThread();
     }
 
@@ -491,6 +493,14 @@ public class JarRunner {
         this.gameRuleCallback = callback;
     }
     
+    public boolean isUseNoGui() {
+        return useNoGui;
+    }
+    
+    public void setUseNoGui(boolean useNoGui) {
+        this.useNoGui = useNoGui;
+    }
+    
     public GameRuleCallback getGameRuleCallback() {
         return gameRuleCallback;
     }
@@ -615,7 +625,14 @@ public class JarRunner {
         
         try {
             String javaCmd = System.getProperty("os.name").toLowerCase().contains("windows") ? "javaw" : "java";
-            ProcessBuilder processBuilder = new ProcessBuilder(javaCmd, "-jar", jarPath, "--nogui");
+            List<String> command = new ArrayList<>();
+            command.add(javaCmd);
+            command.add("-jar");
+            command.add(jarPath);
+            if (useNoGui) {
+                command.add("--nogui");
+            }
+            ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.directory(serverDir);
             processBuilder.redirectErrorStream(true);
             process = processBuilder.start();
