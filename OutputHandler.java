@@ -9,11 +9,15 @@ import java.util.regex.Pattern;
 import javax.swing.JOptionPane;
 public class OutputHandler implements Runnable {
     private static final Pattern GAMERULE_PATTERN = Pattern.compile("\\[\\d{2}:\\d{2}:\\d{2} (?:INFO|WARN|ERROR)\\]: Gamerule (.+?) is currently set to: (true|false|\\d+)");
+    private static final Pattern VERSION_PATTERN = Pattern.compile("(\\d+\\.\\d+\\.?\\d*)");
+    private static final Pattern ERROR_PATTERN = Pattern.compile("(Exception|Error|FAILED|Caused by)");
     private BufferedReader reader;
     private ColorOutputPanel outputPanel;
     private JarRunner jarRunner;
     private String jarPath;
     private boolean eulaChecked = false;
+    private String lastErrorInfo = "";
+    private static volatile GameRuleConfig.MCVersion detectedVersion = null;
     public OutputHandler(InputStream inputStream, ColorOutputPanel outputPanel, JarRunner jarRunner, String jarPath) {
         String charset = EncodingUtils.getServerProcessCharset();
         try {
@@ -91,6 +95,7 @@ public class OutputHandler implements Runnable {
                     } else if (line.contains("Starting minecraft server version")) {
                         String mcVersion = line.substring(line.indexOf("version") + 8).trim();
                         outputPanel.append("[MSH] Minecraft版本: " + mcVersion + "\n");
+                        detectMcVersion(mcVersion);
                     } else if (line.contains("Server Ping Player Sample Count:")) {
                         String sampleCount = line.substring(line.indexOf(":") + 2).trim();
                         outputPanel.append("[MSH] 服务器Ping样本数: " + sampleCount + "\n");
@@ -128,9 +133,34 @@ public class OutputHandler implements Runnable {
                     } else if (line.contains("Checking version, please wait...")) {
                         outputPanel.append("[MSH] 正在检查版本，请稍候...\n");
                     } else if (line.contains("This server is running Paper version")) {
-                        outputPanel.append("[MSH] 服务器正在运行 Paper 版本: " + line.substring(line.indexOf("Paper version") + 14).trim() + "\n");
+                        String versionInfo = line.substring(line.indexOf("Paper version") + 14).trim();
+                        outputPanel.append("[MSH] 服务器正在运行 Paper 版本: " + versionInfo + "\n");
+                        detectMcVersion(versionInfo);
                     } else if (line.contains("You are running the latest version")) {
                         outputPanel.append("[MSH] 您正在运行最新版本\n");
+                    }
+                    
+                    if (ERROR_PATTERN.matcher(line).find()) {
+                        lastErrorInfo = line;
+                        if (line.contains("FileSystemException") || line.contains("另一个程序")) {
+                            lastErrorInfo = "文件被其他程序锁定";
+                        } else if (line.contains("IOException") && line.contains("locked")) {
+                            lastErrorInfo = "文件被锁定";
+                        } else if (line.contains("OutOfMemoryError") || line.contains("java.lang.OutOfMemoryError")) {
+                            lastErrorInfo = "内存不足";
+                        } else if (line.contains("Access denied") || line.contains("权限")) {
+                            lastErrorInfo = "权限不足";
+                        } else if (line.contains("Port") && line.contains("in use")) {
+                            lastErrorInfo = "端口已被占用";
+                        } else if (line.contains("BindException")) {
+                            lastErrorInfo = "端口绑定失败";
+                        } else if (line.contains("Failed to start")) {
+                            lastErrorInfo = "启动失败";
+                        }
+                        
+                        if (jarRunner != null && lastErrorInfo != null) {
+                            jarRunner.setLastError(lastErrorInfo);
+                        }
                     }
                     
                     Matcher gameruleMatcher = GAMERULE_PATTERN.matcher(line);
@@ -242,5 +272,47 @@ public class OutputHandler implements Runnable {
                 }
             });
         }
+    }
+
+    private void detectMcVersion(String versionInfo) {
+        try {
+            Matcher matcher = VERSION_PATTERN.matcher(versionInfo);
+            if (matcher.find()) {
+                String version = matcher.group(1);
+                String[] parts = version.split("\\.");
+                if (parts.length >= 2) {
+                    int minor = Integer.parseInt(parts[1]);
+                    int patch = parts.length >= 3 ? Integer.parseInt(parts[2]) : 0;
+
+                    String displayVersion = "1." + minor;
+                    if (patch > 0) {
+                        displayVersion += "." + patch;
+                    }
+
+                    if (jarRunner != null) {
+                        jarRunner.setServerVersion(displayVersion);
+                    }
+
+                    GameRuleConfig.setDetectedVersion(displayVersion);
+
+                    if (detectedVersion != null) {
+                        outputPanel.append("[MSH] 自动检测到MC版本: " + GameRuleConfig.getCurrentVersion().getDisplayName() + "\n");
+                        if (GameRuleConfig.isUsingJsonConfig()) {
+                            outputPanel.append("[MSH] 使用JSON配置文件: " + GameRuleConfig.getActiveJsonVersion() + ".json\n");
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Logger.error("Failed to detect MC version: " + e.getMessage(), "OutputHandler");
+        }
+    }
+
+    public static GameRuleConfig.MCVersion getDetectedVersion() {
+        return detectedVersion;
+    }
+
+    public static void resetDetectedVersion() {
+        detectedVersion = null;
     }
 }

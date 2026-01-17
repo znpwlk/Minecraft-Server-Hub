@@ -1,3 +1,6 @@
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import java.awt.*;
@@ -7,10 +10,12 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
 import java.util.Properties;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
+
+import javax.swing.JLabel;
+
+
 public class Main {
-    public static final String VERSION = "1.1.2";
+    public static final String VERSION = "1.1.3";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -140,6 +145,8 @@ public class Main {
         System.setProperty("file.encoding", charset);
         System.setProperty("sun.jnu.encoding", charset);
         System.setProperty("console.encoding", charset);
+        
+        JsonGameRuleLoader.setIndexUrl("https://msh.znpwlk.vip/gamerules/index.json");
         
         try {
             System.setOut(new java.io.PrintStream(System.out, true, charset));
@@ -1821,38 +1828,70 @@ public class Main {
     private void handleWindowClosing() {
         Logger.info("Application shutdown initiated", "Main");
         Logger.info("Stop signal sent to all servers", "Main");
-        try {
-            for (JarRunner jarRunner : jarRunners) {
-                if (jarRunner.getStatus() == JarRunner.Status.RUNNING || jarRunner.getStatus() == JarRunner.Status.STARTING) {
-                    jarRunner.stop();
-                }
-            }
-            int waitCount = 0;
-            boolean allStopped = false;
-            while (waitCount < 30) {
-                allStopped = true;
+
+        JDialog progressDialog = new JDialog(frame, "正在关闭服务器", true);
+        JProgressBar progressBar = new JProgressBar();
+        progressBar.setIndeterminate(true);
+        JLabel statusLabel = new JLabel("正在等待服务器停止...");
+        progressBar.setPreferredSize(new Dimension(300, 25));
+        progressDialog.add(BorderLayout.CENTER, progressBar);
+        progressDialog.add(BorderLayout.SOUTH, statusLabel);
+        progressDialog.pack();
+        progressDialog.setLocationRelativeTo(frame);
+        progressDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+
+        SwingWorker<Void, String> worker = new SwingWorker<Void, String>() {
+            @Override
+            protected Void doInBackground() {
                 for (JarRunner jarRunner : jarRunners) {
-                    if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
-                        allStopped = false;
-                        break;
+                    if (jarRunner.getStatus() == JarRunner.Status.RUNNING || jarRunner.getStatus() == JarRunner.Status.STARTING) {
+                        jarRunner.stop();
                     }
                 }
-                if (allStopped) break;
-                Thread.sleep(1000);
-                waitCount++;
+                int waitCount = 0;
+                boolean allStopped = false;
+                while (waitCount < 30) {
+                    allStopped = true;
+                    for (JarRunner jarRunner : jarRunners) {
+                        if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                            allStopped = false;
+                            break;
+                        }
+                    }
+                    if (allStopped) break;
+                    try {
+                        Thread.sleep(500);
+                        publish("等待中... " + waitCount + "/30 秒");
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    waitCount++;
+                }
+                return null;
             }
-        } catch (InterruptedException e) {
-            Logger.error("Shutdown interrupted: " + e.getMessage(), "Main");
-            Thread.currentThread().interrupt();
-        }
-        if (!jarRunners.isEmpty()) {
-            boolean hasRunning = jarRunners.stream().anyMatch(r -> r.getStatus() != JarRunner.Status.STOPPED);
-            if (hasRunning) {
-                Logger.warn("Some servers failed to shutdown gracefully", "Main");
+
+            @Override
+            protected void process(java.util.List<String> chunks) {
+                if (!chunks.isEmpty()) {
+                    statusLabel.setText(chunks.get(chunks.size() - 1));
+                }
             }
-        }
-        Logger.info("Application exiting", "Main");
-        Runtime.getRuntime().exit(0);
+
+            @Override
+            protected void done() {
+                progressDialog.dispose();
+                boolean hasRunning = !jarRunners.isEmpty() && jarRunners.stream().anyMatch(r -> r.getStatus() != JarRunner.Status.STOPPED);
+                if (hasRunning) {
+                    Logger.warn("Some servers failed to shutdown gracefully", "Main");
+                }
+                Logger.info("Application exiting", "Main");
+                Runtime.getRuntime().exit(0);
+            }
+        };
+
+        worker.execute();
+        progressDialog.setVisible(true);
     }
 
     private void showTabContextMenu(int tabIndex, int x, int y) {
@@ -2398,6 +2437,9 @@ public class Main {
         tabLabels.add(tabLabel);
         tabbedPane.setTabComponentAt(tabIndex, tabLabel);
         tabbedPane.setSelectedIndex(tabIndex);
+        
+        java.util.concurrent.atomic.AtomicBoolean shownLockDialog = new java.util.concurrent.atomic.AtomicBoolean(false);
+        
         Thread statusThread = new Thread(() -> {
             while (true) {
                 try {
@@ -2407,9 +2449,52 @@ public class Main {
                     if (currentStatus == JarRunner.Status.RUNNING && !jarRunner.isProcessAlive()) {
                         
                         jarRunner.onProcessTerminated();
-                        currentStatus = jarRunner.getStatus(); 
+                        currentStatus = jarRunner.getStatus();
+                        
+                        if (currentStatus == JarRunner.Status.STOPPED && shownLockDialog.compareAndSet(false, true)) {
+                             String reason = jarRunner.getTerminationReason();
+                             String error = jarRunner.getLastError();
+                             
+                             javax.swing.SwingUtilities.invokeLater(() -> {
+                                 StringBuilder message = new StringBuilder();
+                                 message.append("<html>服务器启动失败!");
+                                 
+                                 if (!reason.isEmpty()) {
+                                     message.append("<br><br><b>检测到文件锁定</b>");
+                                     message.append("<br>原因: ").append(reason);
+                                 }
+                                 
+                                 if (error != null && !error.isEmpty()) {
+                                     message.append("<br><br><b>错误信息</b>");
+                                     message.append("<br>").append(error);
+                                 }
+                                 
+                                 message.append("<br><br>是否尝试强制解除锁定并重新启动?</html>");
+                                 
+                                 int choice = JOptionPane.showConfirmDialog(
+                                     frame,
+                                     message.toString(),
+                                     "服务器启动失败",
+                                     JOptionPane.YES_NO_OPTION,
+                                     JOptionPane.WARNING_MESSAGE
+                                 );
+                                 
+                                 if (choice == JOptionPane.YES_OPTION) {
+                                     jarRunner.clearLastError();
+                                     jarRunner.forceUnlockAndRestart();
+                                 } else {
+                                     jarRunner.clearLastError();
+                                 }
+                             });
+                         }
                     }
+                    
+                    if (currentStatus == JarRunner.Status.RUNNING) {
+                        shownLockDialog.set(false);
+                    }
+                    
                     final JarRunner.Status finalStatus = currentStatus;
+                    final String serverVersion = jarRunner.getServerVersion();
                     SwingUtilities.invokeLater(() -> {
                         switch (finalStatus) {
                             case STOPPED:
@@ -2422,7 +2507,11 @@ public class Main {
                                 reloadButton.setEnabled(false);
                                 break;
                             case RUNNING:
-                                statusLabel.setText("服务器状态: 运行中");
+                                if (serverVersion != null && !serverVersion.isEmpty()) {
+                                    statusLabel.setText("服务器状态: 运行中 (MC " + serverVersion + ")");
+                                } else {
+                                    statusLabel.setText("服务器状态: 运行中");
+                                }
                                 statusLabel.setForeground(Color.GREEN);
                                 startButton.setEnabled(false);
                                 stopButton.setEnabled(true);

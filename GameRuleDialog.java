@@ -11,13 +11,18 @@ public class GameRuleDialog extends JDialog {
     private final Map<String, JComponent> ruleComponents = new HashMap<>();
     private final Map<String, GameRuleConfig.GameRule> rulesMap = new HashMap<>();
     private JLabel statusLabel;
-    private JComboBox<GameRuleConfig.MCVersion> versionComboBox;
+    private JRadioButton versionOldButton;
+    private JRadioButton versionNewButton;
+    private ButtonGroup versionButtonGroup;
     private int loadedRulesCount = 0;
     private int totalRulesToLoad = 0;
     private volatile boolean serverAvailable = false;
     private final Map<String, String> currentRuleValues = new HashMap<>();
     private final AtomicBoolean isDisposed = new AtomicBoolean(false);
     private final AtomicBoolean isLoading = new AtomicBoolean(false);
+    private JLabel configSourceLabel;
+    private static final int DIALOG_WIDTH = 540;
+    private static final int DIALOG_HEIGHT = 700;
 
     public static boolean showDialog(JFrame parent, JarRunner jarRunner) {
         if (jarRunner == null || jarRunner.getStatus() != JarRunner.Status.RUNNING) {
@@ -85,7 +90,7 @@ public class GameRuleDialog extends JDialog {
     private void initUI() {
         try {
             setLayout(new BorderLayout());
-            setSize(520, 680);
+            setSize(DIALOG_WIDTH, DIALOG_HEIGHT);
             setLocationRelativeTo(getParent());
             setResizable(true);
 
@@ -105,20 +110,32 @@ public class GameRuleDialog extends JDialog {
             versionLabel.setFont(new Font(null, Font.PLAIN, 12));
             versionPanel.add(versionLabel);
 
-            versionComboBox = new JComboBox<>();
-            versionComboBox.setFont(new Font(null, Font.PLAIN, 12));
-            for (GameRuleConfig.MCVersion version : GameRuleConfig.getAvailableVersions()) {
-                versionComboBox.addItem(version);
-            }
-            versionComboBox.setSelectedItem(GameRuleConfig.getCurrentVersion());
-            versionComboBox.addActionListener(e -> {
-                GameRuleConfig.MCVersion selectedVersion = (GameRuleConfig.MCVersion) versionComboBox.getSelectedItem();
-                if (selectedVersion != null && selectedVersion != GameRuleConfig.getCurrentVersion()) {
-                    GameRuleConfig.setCurrentVersion(selectedVersion);
+            versionButtonGroup = new ButtonGroup();
+            versionOldButton = new JRadioButton("1.21.10及以前", GameRuleConfig.getCurrentVersion() == GameRuleConfig.MCVersion.V1_21_10);
+            versionOldButton.setFont(new Font(null, Font.PLAIN, 12));
+            versionNewButton = new JRadioButton("1.21.11+", GameRuleConfig.getCurrentVersion() == GameRuleConfig.MCVersion.V1_21_11);
+            versionNewButton.setFont(new Font(null, Font.PLAIN, 12));
+
+            versionButtonGroup.add(versionOldButton);
+            versionButtonGroup.add(versionNewButton);
+            versionPanel.add(versionOldButton);
+            versionPanel.add(versionNewButton);
+
+            versionOldButton.addActionListener(e -> {
+                if (versionOldButton.isSelected()) {
+                    GameRuleConfig.setCurrentVersion(GameRuleConfig.MCVersion.V1_21_10);
                     reloadRules();
                 }
             });
-            versionPanel.add(versionComboBox);
+
+            versionNewButton.addActionListener(e -> {
+                if (versionNewButton.isSelected()) {
+                    GameRuleConfig.setCurrentVersion(GameRuleConfig.MCVersion.V1_21_11);
+                    reloadRules();
+                }
+            });
+
+            versionPanel.add(versionNewButton);
 
             titlePanel.add(titleLabelPanel, BorderLayout.NORTH);
             titlePanel.add(versionPanel, BorderLayout.SOUTH);
@@ -128,6 +145,12 @@ public class GameRuleDialog extends JDialog {
             statusLabel = new JLabel("正在查询服务器...");
             statusLabel.setFont(new Font(null, Font.PLAIN, 12));
             statusPanel.add(statusLabel, BorderLayout.CENTER);
+
+            configSourceLabel = new JLabel();
+            configSourceLabel.setFont(new Font(null, Font.PLAIN, 11));
+            configSourceLabel.setForeground(new Color(100, 100, 100));
+            statusPanel.add(configSourceLabel, BorderLayout.EAST);
+
             titlePanel.add(statusPanel, BorderLayout.SOUTH);
 
             mainPanel.add(titlePanel, BorderLayout.NORTH);
@@ -139,6 +162,7 @@ public class GameRuleDialog extends JDialog {
             gbc.fill = GridBagConstraints.HORIZONTAL;
             gbc.weightx = 1.0;
 
+            updateConfigSource();
             List<GameRuleConfig.GameRule> rules = GameRuleConfig.getGameRules();
             if (rules != null) {
                 int row = 0;
@@ -165,7 +189,14 @@ public class GameRuleDialog extends JDialog {
 
             JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
             JButton refreshButton = new JButton("刷新状态");
+            JButton refreshConfigButton = new JButton("刷新配置");
             JButton closeButton = new JButton("关闭");
+
+            if (JsonGameRuleLoader.isLoadedFromRemote()) {
+                refreshConfigButton.setEnabled(true);
+            } else {
+                refreshConfigButton.setEnabled(false);
+            }
 
             refreshButton.addActionListener(e -> {
                 if (!isDisposed.get() && !isLoading.getAndSet(true)) {
@@ -173,9 +204,21 @@ public class GameRuleDialog extends JDialog {
                     isLoading.set(false);
                 }
             });
+
+            refreshConfigButton.addActionListener(e -> {
+                if (!isDisposed.get()) {
+                    JsonGameRuleLoader.refreshFromRemote();
+                    GameRuleConfig.clearCache();
+                    jarRunner.getOutputPanel().append("[MSH] 正在从云端刷新配置...\n");
+                    reloadRules();
+                    jarRunner.getOutputPanel().append("[MSH] 配置已刷新\n");
+                }
+            });
+
             closeButton.addActionListener(e -> dispose());
 
             buttonPanel.add(refreshButton);
+            buttonPanel.add(refreshConfigButton);
             buttonPanel.add(closeButton);
             mainPanel.add(buttonPanel, BorderLayout.SOUTH);
 
@@ -186,12 +229,23 @@ public class GameRuleDialog extends JDialog {
         }
     }
 
+    private void updateConfigSource() {
+        if (GameRuleConfig.isUsingJsonConfig()) {
+            configSourceLabel.setText("[JSON:" + GameRuleConfig.getActiveJsonVersion() + "]");
+        } else if (GameRuleConfig.isUseJsonConfig()) {
+            configSourceLabel.setText("[内置配置]");
+        } else {
+            configSourceLabel.setText("[内置配置]");
+        }
+    }
+
     private void reloadRules() {
         ruleComponents.clear();
         rulesMap.clear();
         currentRuleValues.clear();
         getContentPane().removeAll();
         loadedRulesCount = 0;
+        updateConfigSource();
         initUI();
         revalidate();
         repaint();
@@ -225,7 +279,8 @@ public class GameRuleDialog extends JDialog {
             checkBox.addActionListener(e -> {
                 if (serverAvailable) {
                     boolean newValue = checkBox.isSelected();
-                    jarRunner.sendCommand("gamerule " + rule.getName() + " " + newValue);
+                    String formattedName = GameRuleConfig.getFormattedRuleName(rule.getName(), GameRuleConfig.getCurrentVersion());
+                    jarRunner.sendCommand("gamerule " + formattedName + " " + newValue);
                 }
             });
             valueComponent = checkBox;
@@ -237,7 +292,8 @@ public class GameRuleDialog extends JDialog {
             spinner.addChangeListener(e -> {
                 if (serverAvailable) {
                     int newValue = (Integer) spinner.getValue();
-                    jarRunner.sendCommand("gamerule " + rule.getName() + " " + newValue);
+                    String formattedName = GameRuleConfig.getFormattedRuleName(rule.getName(), GameRuleConfig.getCurrentVersion());
+                    jarRunner.sendCommand("gamerule " + formattedName + " " + newValue);
                 }
             });
             valueComponent = spinner;
@@ -255,7 +311,8 @@ public class GameRuleDialog extends JDialog {
         statusLabel.setText("正在查询服务器...");
         jarRunner.getOutputPanel().append("[MSH] 正在查询游戏规则 (MC " + GameRuleConfig.getCurrentVersion().getDisplayName() + ")...\n");
         for (GameRuleConfig.GameRule rule : GameRuleConfig.getGameRules()) {
-            jarRunner.sendCommand("gamerule " + rule.getName());
+            String formattedName = GameRuleConfig.getFormattedRuleName(rule.getName(), GameRuleConfig.getCurrentVersion());
+            jarRunner.sendCommand("gamerule " + formattedName);
         }
     }
 
@@ -268,7 +325,6 @@ public class GameRuleDialog extends JDialog {
                 rulesMap.put(ruleName, rule);
                 JPanel rulesParent = (JPanel) ((JScrollPane) getContentPane().getComponent(0)).getViewport().getView();
                 if (rulesParent instanceof JPanel) {
-                    GridBagLayout layout = (GridBagLayout) rulesParent.getLayout();
                     int row = rulesMap.size() - 1;
                     JPanel rulePanel = createRulePanel(rule);
                     if (rulePanel != null) {

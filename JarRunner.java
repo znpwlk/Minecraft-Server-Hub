@@ -6,6 +6,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import javax.swing.JFrame;
+import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
 
 public class JarRunner {
     public interface GameRuleCallback {
@@ -53,6 +56,14 @@ public class JarRunner {
     private volatile long lastBackupTime;
     private volatile boolean isBackingUp = false;
     private boolean useNoGui;
+    private String serverVersion;
+    private String lastError;
+    private volatile long lastAccessTime;
+    private Thread lockMonitorThread;
+    private volatile boolean stopLockMonitor;
+    private static final long LOCK_DETECTION_INTERVAL = 30000;
+    private static final long IDLE_THRESHOLD = 600000;
+    private volatile boolean lockDialogShown = false;
     
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
         this.jarPath = jarPath;
@@ -72,6 +83,10 @@ public class JarRunner {
         this.lastBackupTime = 0;
         this.stopBackupTimer = false;
         this.useNoGui = true;
+        this.serverVersion = null;
+        this.lastError = null;
+        this.lastAccessTime = System.currentTimeMillis();
+        startLockMonitorThread();
         startHourlyResetThread();
     }
 
@@ -97,6 +112,102 @@ public class JarRunner {
         hourlyResetThread.start();
     }
 
+    private void startLockMonitorThread() {
+        stopLockMonitor = false;
+        lockMonitorThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted() && !stopLockMonitor) {
+                try {
+                    Thread.sleep(LOCK_DETECTION_INTERVAL);
+                    if (stopLockMonitor) break;
+                    checkFileLockStatus();
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        });
+        lockMonitorThread.setDaemon(true);
+        lockMonitorThread.setName("lock-monitor-" + jarPath);
+        lockMonitorThread.start();
+    }
+
+    private void checkFileLockStatus() {
+        if (status != Status.RUNNING && status != Status.STARTING) {
+            lastAccessTime = System.currentTimeMillis();
+            return;
+        }
+
+        File jarFile = new File(jarPath);
+        if (!jarFile.exists()) {
+            return;
+        }
+
+        long idleTime = System.currentTimeMillis() - lastAccessTime;
+        if (idleTime < IDLE_THRESHOLD) {
+            return;
+        }
+
+        if (lockDialogShown) {
+            return;
+        }
+
+        if (!isFileLockedByProcess()) {
+            lastAccessTime = System.currentTimeMillis();
+            lockDialogShown = false;
+            return;
+        }
+
+        lockDialogShown = true;
+        Logger.info("Detected idle file lock, showing dialog: " + jarPath, "JarRunner");
+
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            JFrame frame = (JFrame) SwingUtilities.getWindowAncestor(outputPanel);
+            if (frame == null) {
+                lockDialogShown = false;
+                return;
+            }
+
+            String serverName = getDisplayName();
+            int option = JOptionPane.showOptionDialog(
+                frame,
+                "服务器 " + serverName + " 文件已被锁定超过 " + (idleTime / 60000) + " 分钟未活动。\n是否尝试自动解除锁定并重启服务器？",
+                "文件锁定提醒",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                new String[]{"自动处理（解除锁定并重启）", "暂不处理"},
+                "暂不处理"
+            );
+
+            if (option == JOptionPane.YES_OPTION) {
+                Logger.info("User confirmed auto-release lock for: " + jarPath, "JarRunner");
+                outputPanel.append("[MSH] 用户选择自动解除文件锁定...\n");
+                forceUnlockAndRestart();
+            } else {
+                Logger.info("User deferred lock release for: " + jarPath, "JarRunner");
+                outputPanel.append("[MSH] 用户选择暂不处理文件锁定\n");
+            }
+            lockDialogShown = false;
+            lastAccessTime = System.currentTimeMillis();
+        });
+    }
+
+    private boolean isFileLockedByProcess() {
+        File jarFile = new File(jarPath);
+        if (!jarFile.exists()) {
+            return false;
+        }
+
+        try (FileInputStream fis = new FileInputStream(jarFile)) {
+            return false;
+        } catch (IOException e) {
+            return isFileLocked(e);
+        }
+    }
+
+    public void updateLastAccessTime() {
+        this.lastAccessTime = System.currentTimeMillis();
+    }
+
     private void checkAndResetHourlyCounter() {
         long now = System.currentTimeMillis();
         if (lastRestartTimestamp > 0 && now - lastRestartTimestamp >= 3600000) {
@@ -108,7 +219,20 @@ public class JarRunner {
         if (hourlyResetThread != null) {
             hourlyResetThread.interrupt();
         }
+        stopLockMonitorThread();
         stopBackupTimerThread();
+    }
+
+    private void stopLockMonitorThread() {
+        stopLockMonitor = true;
+        if (lockMonitorThread != null && lockMonitorThread.isAlive()) {
+            lockMonitorThread.interrupt();
+            try {
+                lockMonitorThread.join(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
     
     public boolean isBackupEnabled() {
@@ -501,6 +625,26 @@ public class JarRunner {
         this.useNoGui = useNoGui;
     }
     
+    public String getServerVersion() {
+        return serverVersion;
+    }
+    
+    public void setServerVersion(String version) {
+        this.serverVersion = version;
+    }
+    
+    public String getLastError() {
+        return lastError;
+    }
+    
+    public void setLastError(String error) {
+        this.lastError = error;
+    }
+    
+    public void clearLastError() {
+        this.lastError = null;
+    }
+    
     public GameRuleCallback getGameRuleCallback() {
         return gameRuleCallback;
     }
@@ -531,60 +675,399 @@ public class JarRunner {
             return;
         }
         
-        Logger.warn("Detected server process terminated: " + jarPath, "JarRunner");
-        outputPanel.append("[MSH] Detected server process terminated\n");
+        int exitCode = -1;
+        try {
+            exitCode = process.exitValue();
+        } catch (IllegalThreadStateException e) {
+        }
+        
+        Logger.warn("Detected server process terminated: " + jarPath + ", exit code: " + exitCode, "JarRunner");
+        outputPanel.append("[MSH] 检测到服务器进程已终止，退出代码: " + exitCode + "\n");
+        
         if (isNormalStop && !forceKeepAlive) {
             Logger.info("Server normal shutdown, skipping auto-restart: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] Server normal shutdown, skipping auto-restart\n");
+            outputPanel.append("[MSH] 服务器正常关闭，跳过自动重启\n");
             status = Status.STOPPED;
             cleanupProcess();
+            cleanupLockFilesDelayed();
             return;
         }
         
-        checkAndResetHourlyCounter();
-
-        
-        boolean withinLimit = maxHourlyAttempts == -1 || currentHourlyAttempts.get() < maxHourlyAttempts;
-        boolean shouldRestart = forceKeepAlive || (autoRestartEnabled && withinLimit);
-        
-        if (shouldRestart) {
-            if (!forceKeepAlive) {
-                int attempts = currentHourlyAttempts.incrementAndGet();
-                lastRestartTimestamp = System.currentTimeMillis();
-                String attemptInfo = maxHourlyAttempts == -1 
-                    ? String.format(" (attempt %d this hour)", attempts)
-                    : String.format(" (attempt %d/%d this hour)", attempts, maxHourlyAttempts);
-                Logger.warn("Server abnormal termination detected, auto-restart in " + restartInterval + " seconds" + attemptInfo, "JarRunner");
-                Logger.warn("WARN: Server process terminated unexpectedly - initiating auto-restart sequence", "JarRunner");
-                outputPanel.append("[MSH] Server abnormal termination detected, auto-restart in " + restartInterval + " seconds" + attemptInfo + "\n");
-            } else {
-                lastRestartTimestamp = System.currentTimeMillis();
-                Logger.warn(String.format("Force keep alive mode: auto-restart in %d seconds", restartInterval), "JarRunner");
-                outputPanel.append(String.format("[MSH] Force keep alive mode: auto-restart in %d seconds\n", restartInterval) + "\n");
-            }
-            
-            Thread restartThread = new Thread(() -> {
-                try {
-                    if (restartInterval > 0) {
-                        Thread.sleep(restartInterval * 1000L);
-                    }
-                    checkAndResetHourlyCounter();
-                    if (status == Status.STOPPED && shouldRestart) {
-                        Logger.info("Executing auto-restart", "JarRunner");
-                        outputPanel.append("[MSH] Executing auto-restart...\n");
-                        JarRunner.this.start();
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            });
-            restartThread.setDaemon(true);
-            restartThread.start();
-        } else if (autoRestartEnabled && !forceKeepAlive && maxHourlyAttempts != -1 && currentHourlyAttempts.get() >= maxHourlyAttempts) {
-            Logger.error("Auto-restart attempts exhausted for this hour, stopping restart attempts: " + jarPath, "JarRunner");
-            outputPanel.append("[MSH] Auto-restart attempts exhausted for this hour, stopping restart attempts\n");
+        String terminationReason = detectTerminationReason(exitCode);
+        if (!terminationReason.isEmpty()) {
+            outputPanel.append("[MSH] 可能原因: " + terminationReason + "\n");
+            showTerminationDialog(terminationReason, exitCode);
+        } else if (exitCode != 0 && exitCode != -1) {
+            String exitCodeReason = getExitCodeReason(exitCode);
+            outputPanel.append("[MSH] 异常退出: " + exitCodeReason + "\n");
+            showTerminationDialog(exitCodeReason, exitCode);
+        } else {
+            checkAndResetHourlyCounter();
         }
     }
+    
+    private String getExitCodeReason(int exitCode) {
+        switch (exitCode) {
+            case 1:
+                return "一般性错误，服务器启动失败";
+            case 2:
+                return "命令行参数错误";
+            case 3:
+                return "启动前检查失败";
+            case 4:
+                return "内存分配失败";
+            case 130:
+                return "进程被信号中断 (Ctrl+C)";
+            case 137:
+                return "进程被强制终止 (OOM Killer或手动kill)";
+            case 139:
+                return "段错误，JVM崩溃";
+            case 143:
+                return "进程被终止 (TERM信号)";
+            case 255:
+                return "未知错误，服务器异常退出";
+            default:
+                if (exitCode < 0 && exitCode > -128) {
+                    return "进程被信号 " + Math.abs(exitCode) + " 终止";
+                }
+                return "未知退出代码: " + exitCode;
+        }
+    }
+    
+    private void cleanupLockFilesDelayed() {
+        Thread cleanupThread = new Thread(() -> {
+            try {
+                Thread.sleep(2000);
+                cleanupLockFiles();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        cleanupThread.setDaemon(true);
+        cleanupThread.setName("lock-cleanup-" + jarPath);
+        cleanupThread.start();
+    }
+    
+    private String detectTerminationReason(int exitCode) {
+        File serverDir = new File(jarPath).getParentFile();
+        if (serverDir == null) {
+            return "";
+        }
+        
+        File[] lockFiles = {
+            new File(serverDir, "session.lock"),
+            new File(serverDir, "world/session.lock"),
+            new File(serverDir, "logs/latest.log.lck"),
+            new File(serverDir, "usercache.json.lock"),
+            new File(serverDir, "players/stats/*.json.lock")
+        };
+        
+        for (File lockFile : lockFiles) {
+            if (lockFile.exists()) {
+                return "文件被锁定: " + lockFile.getName();
+            }
+        }
+        
+        File worldDir = new File(serverDir, "world");
+        if (worldDir.exists()) {
+            File[] files = worldDir.listFiles((dir, name) -> 
+                name.endsWith(".lock") || name.equals("session.lock")
+            );
+            if (files != null && files.length > 0) {
+                return "世界文件夹被锁定: " + files[0].getName();
+            }
+        }
+        
+        File logsDir = new File(serverDir, "logs");
+        if (logsDir.exists()) {
+            File[] files = logsDir.listFiles((dir, name) -> name.endsWith(".lck"));
+            if (files != null && files.length > 0) {
+                return "日志文件被锁定: " + files[0].getName();
+            }
+        }
+        
+        if (exitCode == 137) {
+            return "内存不足导致进程被系统终止";
+        }
+        
+        if (exitCode == 139) {
+            return "JVM发生段错误，可能内存损坏或库冲突";
+        }
+        
+        if (lastError != null && !lastError.isEmpty()) {
+            if (lastError.contains("内存不足") || lastError.contains("OutOfMemory")) {
+                return "内存不足错误";
+            }
+            if (lastError.contains("端口") || lastError.contains("Bind")) {
+                return "端口被占用或绑定失败";
+            }
+            if (lastError.contains("权限") || lastError.contains("Access denied")) {
+                return "文件权限不足";
+            }
+            if (lastError.contains("锁定") || lastError.contains("locked")) {
+                return "文件被其他程序锁定";
+            }
+            return "错误: " + lastError;
+        }
+        
+        return "";
+    }
+    
+    private void cleanupLockFiles() {
+        File serverDir = new File(jarPath).getParentFile();
+        if (serverDir == null) {
+            Logger.warn("Server directory is null, skipping lock file cleanup", "JarRunner");
+            return;
+        }
+        
+        try {
+            File[] lockFiles = {
+                new File(serverDir, "session.lock"),
+                new File(serverDir, "world/session.lock"),
+                new File(serverDir, "logs/latest.log.lck")
+            };
+            
+            for (File lockFile : lockFiles) {
+                if (lockFile.exists()) {
+                    try {
+                        boolean deleted = deleteLockFileWithRetry(lockFile, 3);
+                        if (deleted) {
+                            outputPanel.append("[MSH] 已清理锁定文件: " + lockFile.getName() + "\n");
+                            Logger.info("Successfully cleaned up lock file: " + lockFile.getAbsolutePath(), "JarRunner");
+                        }
+                    } catch (Exception e) {
+                        outputPanel.append("[MSH] 无法清理 " + lockFile.getName() + ": " + e.getMessage() + "\n");
+                        Logger.warn("Failed to cleanup lock file " + lockFile.getAbsolutePath() + ": " + e.getMessage(), "JarRunner");
+                    }
+                }
+            }
+            
+            File worldDir = new File(serverDir, "world");
+            if (worldDir.exists()) {
+                File[] files = worldDir.listFiles((dir, name) -> 
+                    name.endsWith(".lock") || name.equals("session.lock")
+                );
+                if (files != null && files.length > 0) {
+                    outputPanel.append("[MSH] 发现 " + files.length + " 个世界锁定文件，正在清理...\n");
+                    Logger.info("Found " + files.length + " world lock files, cleaning up", "JarRunner");
+                    for (File file : files) {
+                        try {
+                            boolean deleted = deleteLockFileWithRetry(file, 3);
+                            if (deleted) {
+                                outputPanel.append("[MSH] 已清理锁定文件: " + file.getName() + "\n");
+                                Logger.info("Successfully cleaned up world lock file: " + file.getAbsolutePath(), "JarRunner");
+                            }
+                        } catch (Exception e) {
+                            outputPanel.append("[MSH] 无法清理 " + file.getName() + ": " + e.getMessage() + "\n");
+                        }
+                    }
+                }
+            } else {
+                Logger.debug("World directory does not exist, skipping world lock file cleanup", "JarRunner");
+            }
+        } catch (Exception e) {
+            Logger.error("Failed to cleanup lock files: " + e.getMessage(), "JarRunner");
+        }
+    }
+    
+    private void showTerminationDialog(String reason, int exitCode) {
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            JFrame frame = (JFrame) SwingUtilities.getWindowAncestor(outputPanel);
+            if (frame == null) {
+                return;
+            }
+            
+            String serverName = getDisplayName();
+            StringBuilder message = new StringBuilder();
+            message.append("服务器 ").append(serverName).append(" 异常关闭！\n\n");
+            message.append("原因: ").append(reason);
+            if (exitCode != -1 && exitCode != 0) {
+                message.append("\n退出代码: ").append(exitCode);
+            }
+            message.append("\n\n是否尝试自动处理并重启服务器？");
+            
+            int option = JOptionPane.showOptionDialog(
+                frame,
+                message.toString(),
+                "服务器异常关闭",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                new String[]{"自动处理并重启", "手动处理"},
+                "手动处理"
+            );
+            
+            if (option == JOptionPane.YES_OPTION) {
+                Logger.info("User confirmed auto-handle for: " + jarPath, "JarRunner");
+                outputPanel.append("[MSH] 用户选择自动处理...\n");
+                handleTerminationAuto(action -> {
+                    if (action == 1) {
+                        forceUnlockAndRestart();
+                    } else if (action == 2) {
+                        cleanupLockFiles();
+                        start();
+                    } else if (action == 3) {
+                        forceStopChildren();
+                        forceUnlockAndRestart();
+                    }
+                });
+            } else {
+                Logger.info("User chose manual handling for: " + jarPath, "JarRunner");
+                outputPanel.append("[MSH] 用户选择手动处理\n");
+            }
+            checkAndResetHourlyCounter();
+        });
+    }
+    
+    private void handleTerminationAuto(java.util.function.Consumer<Integer> actionCallback) {
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            JFrame frame = (JFrame) SwingUtilities.getWindowAncestor(outputPanel);
+            if (frame == null) {
+                actionCallback.accept(0);
+                return;
+            }
+            
+            String[] options = {"解除锁定后重启", "清理文件后重启", "强制终止后重启"};
+            int choice = JOptionPane.showOptionDialog(
+                frame,
+                "请选择自动处理方式:",
+                "选择处理方式",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]
+            );
+            
+            actionCallback.accept(choice + 1);
+        });
+    }
+    
+    private void forceStopChildren() {
+        File serverDir = new File(jarPath).getParentFile();
+        if (serverDir == null) return;
+        
+        try {
+            ProcessBuilder pb = new ProcessBuilder("taskkill", "/F", "/T", "/IM", "java.exe");
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+            p.waitFor();
+            outputPanel.append("[MSH] 已尝试终止所有Java子进程\n");
+            Thread.sleep(1000);
+        } catch (Exception e) {
+            outputPanel.append("[MSH] 无法终止子进程: " + e.getMessage() + "\n");
+        }
+    }
+    
+    public String getTerminationReason() {
+        int exitCode = -1;
+        try {
+            if (process != null) {
+                exitCode = process.exitValue();
+            }
+        } catch (IllegalThreadStateException e) {
+        }
+        return detectTerminationReason(exitCode);
+    }
+    
+    public void forceUnlockAndRestart() {
+        cleanupProcess();
+        
+        File serverDir = new File(jarPath).getParentFile();
+        if (serverDir != null) {
+            outputPanel.append("[MSH] 正在解除文件锁定...\n");
+            Logger.info("Attempting to release file locks for: " + jarPath, "JarRunner");
+            
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            
+            File[] lockFiles = {
+                new File(serverDir, "session.lock"),
+                new File(serverDir, "world/session.lock"),
+                new File(serverDir, "logs/latest.log.lck")
+            };
+            
+            for (File lockFile : lockFiles) {
+                if (lockFile.exists()) {
+                    boolean deleted = deleteLockFileWithRetry(lockFile, 3);
+                    if (deleted) {
+                        outputPanel.append("[MSH] 已删除锁定文件: " + lockFile.getName() + "\n");
+                    }
+                }
+            }
+            
+            File worldDir = new File(serverDir, "world");
+            if (worldDir.exists()) {
+                File[] files = worldDir.listFiles((dir, name) -> 
+                    name.endsWith(".lock") || name.equals("session.lock")
+                );
+                if (files != null && files.length > 0) {
+                    outputPanel.append("[MSH] 发现 " + files.length + " 个世界锁定文件，正在删除...\n");
+                    for (File file : files) {
+                        boolean deleted = deleteLockFileWithRetry(file, 3);
+                        if (deleted) {
+                            outputPanel.append("[MSH] 已删除锁定文件: " + file.getName() + "\n");
+                        }
+                    }
+                }
+            }
+            
+            outputPanel.append("[MSH] 等待文件锁释放...\n");
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        
+        status = Status.STOPPED;
+        isTerminated = false;
+        isNormalStop = false;
+        
+        outputPanel.append("[MSH] 正在重新启动服务器...\n");
+        start();
+    }
+    
+    private boolean deleteLockFileWithRetry(File file, int maxRetries) {
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                if (!file.exists()) {
+                    return true;
+                }
+                
+                boolean deleted = Files.deleteIfExists(file.toPath());
+                if (deleted) {
+                    Logger.info("Successfully deleted lock file: " + file.getAbsolutePath() + " (attempt " + attempt + ")", "JarRunner");
+                    return true;
+                }
+                
+                if (attempt < maxRetries) {
+                    outputPanel.append("[MSH] 第 " + attempt + " 次尝试删除 " + file.getName() + " 失败，等待重试...\n");
+                    Thread.sleep(1000);
+                }
+            } catch (IOException e) {
+                Logger.warn("Failed to delete lock file " + file.getAbsolutePath() + " (attempt " + attempt + "): " + e.getMessage(), "JarRunner");
+                if (attempt < maxRetries) {
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        
+        outputPanel.append("[MSH] 无法删除锁定文件: " + file.getName() + "\n");
+        return false;
+    }
+
     public void start() {
         if (status == Status.RUNNING || status == Status.STARTING) {
             Logger.warn("Server already running or starting, skipping start request: " + jarPath, "JarRunner");
@@ -722,6 +1205,7 @@ public class JarRunner {
     public void onServerFullyStarted() {
         if (status == Status.STARTING) {
             status = Status.RUNNING;
+            lastAccessTime = System.currentTimeMillis();
             Logger.info("Server startup completed successfully: " + jarPath, "JarRunner");
             outputPanel.append("[MSH] Server startup completed: " + jarPath + "\n");
         }
@@ -820,6 +1304,7 @@ public class JarRunner {
             Logger.debug("Sending server command: " + command, "JarRunner");
             commandWriter.println(command);
             commandWriter.flush();
+            lastAccessTime = System.currentTimeMillis();
             outputPanel.append("[Command] " + command + "\n");
             String cmdLower = command.toLowerCase().trim();
             if (cmdLower.equals("stop") || cmdLower.equals("/stop")) {
@@ -838,6 +1323,7 @@ public class JarRunner {
         }
         Logger.info("Restarting server: " + jarPath, "JarRunner");
         outputPanel.append("[MSH] Restarting server: " + jarPath + "\n");
+        status = Status.STOPPING;
         stop();
         try {
             Thread.sleep(2000);
