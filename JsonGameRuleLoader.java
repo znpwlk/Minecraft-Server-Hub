@@ -4,7 +4,6 @@ import java.nio.file.*;
 import java.util.*;
 
 public class JsonGameRuleLoader {
-    private static String configDir = "版本json";
     private static String indexUrl = null;
     private static final String CACHE_DIR = "MSH/gameRules";
     private static final Map<String, JsonGameRuleSet> CACHE = new LinkedHashMap<String, JsonGameRuleSet>() {
@@ -19,22 +18,11 @@ public class JsonGameRuleLoader {
     private static boolean loadedFromRemote = false;
     private static long lastRemoteLoadTime = 0;
 
-    public static void setConfigDirectory(String directory) {
-        if (directory != null && !directory.trim().isEmpty()) {
-            configDir = directory.trim();
-            clearCache();
-        }
-    }
-
     public static void setIndexUrl(String url) {
         if (url != null && !url.trim().isEmpty()) {
             indexUrl = url.trim();
             clearCache();
         }
-    }
-
-    public static String getConfigDirectory() {
-        return configDir;
     }
 
     public static String getIndexUrl() {
@@ -155,14 +143,6 @@ public class JsonGameRuleLoader {
             }
         }
 
-        if (index == null) {
-            Path localPath = Paths.get(configDir, "index.json");
-            String content = readFromFile(localPath.toString());
-            if (content != null) {
-                index = parseIndexJson(content);
-            }
-        }
-
         if (index != null) {
             indexCache = index;
             indexLoadTime = now;
@@ -236,17 +216,21 @@ public class JsonGameRuleLoader {
         if (index != null && index.versionMapping != null) {
             String mappedVersion = index.versionMapping.get(version);
             if (mappedVersion != null) {
-                fileName = mappedVersion + ".json";
+                fileName = mappedVersion;
             }
         }
 
         if (fileName == null) {
-            fileName = version + ".json";
+            fileName = version;
+        }
+
+        if (!fileName.toLowerCase().endsWith(".json")) {
+            fileName = fileName + ".json";
         }
 
         String baseUrl = getBaseUrl();
         if (baseUrl != null) {
-            String remoteUrl = baseUrl + fileName;
+            String remoteUrl = baseUrl + "d/" + fileName;
             String content = fetchFromUrl(remoteUrl);
             if (content != null) {
                 ruleSet = parseJson(content, version);
@@ -260,14 +244,6 @@ public class JsonGameRuleLoader {
         if (ruleSet == null) {
             Path cachePath = Paths.get(CACHE_DIR, fileName);
             String content = readFromFile(cachePath.toString());
-            if (content != null) {
-                ruleSet = parseJson(content, version);
-            }
-        }
-
-        if (ruleSet == null) {
-            Path localPath = Paths.get(configDir, fileName);
-            String content = readFromFile(localPath.toString());
             if (content != null) {
                 ruleSet = parseJson(content, version);
             }
@@ -468,36 +444,7 @@ public class JsonGameRuleLoader {
             return sorted.toArray(new String[0]);
         }
 
-        Path dir = Paths.get(configDir);
-        if (!Files.exists(dir)) {
-            return new String[0];
-        }
-
-        List<String> versions = new ArrayList<>();
-        try {
-            Files.list(dir)
-                .filter(path -> path.toString().endsWith(".json"))
-                .filter(path -> !path.getFileName().toString().equals("index.json"))
-                .forEach(path -> {
-                    String fileName = path.getFileName().toString();
-                    String version = fileName.replace(".json", "");
-                    versions.add(version);
-                });
-        } catch (IOException e) {
-            return new String[0];
-        }
-
-        versions.sort((a, b) -> {
-            try {
-                double va = Double.parseDouble(a.replace(".", "").substring(0, Math.min(4, a.length())));
-                double vb = Double.parseDouble(b.replace(".", "").substring(0, Math.min(4, b.length())));
-                return Double.compare(vb, va);
-            } catch (Exception e) {
-                return b.compareTo(a);
-            }
-        });
-
-        return versions.toArray(new String[0]);
+        return new String[0];
     }
 
     public static String findMatchingJsonVersion(String mcVersion) {
@@ -519,20 +466,27 @@ public class JsonGameRuleLoader {
         }
 
         Arrays.sort(availableVersions, (a, b) -> {
-            try {
-                double va = Double.parseDouble(a.replace(".", "").substring(0, Math.min(4, a.length())));
-                double vb = Double.parseDouble(b.replace(".", "").substring(0, Math.min(4, b.length())));
-                return Double.compare(va, vb);
-            } catch (Exception e) {
-                return a.compareTo(b);
-            }
+            int cmp = compareVersions(a, b);
+            return cmp;
         });
 
-        int serverPatch = getPatchVersion(mcVersion);
+        int serverMajor = getMajorVersion(mcVersion);
+        int serverMinor = getMinorVersion(mcVersion);
 
         for (String jsonVersion : availableVersions) {
-            int jsonPatch = getPatchVersion(jsonVersion);
-            if (serverPatch >= jsonPatch) {
+            int jsonMajor = getMajorVersion(jsonVersion);
+            int jsonMinor = getMinorVersion(jsonVersion);
+
+            if (jsonMajor == serverMajor && jsonMinor == serverMinor) {
+                return jsonVersion;
+            }
+        }
+
+        for (String jsonVersion : availableVersions) {
+            int jsonMajor = getMajorVersion(jsonVersion);
+            int jsonMinor = getMinorVersion(jsonVersion);
+
+            if (jsonMajor < serverMajor || (jsonMajor == serverMajor && jsonMinor < serverMinor)) {
                 return jsonVersion;
             }
         }
@@ -540,16 +494,51 @@ public class JsonGameRuleLoader {
         return availableVersions[0];
     }
 
+    private static int getMajorVersion(String version) {
+        try {
+            String[] parts = version.split("\\.");
+            return Integer.parseInt(parts[0]);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static int getMinorVersion(String version) {
+        try {
+            String[] parts = version.split("\\.");
+            if (parts.length >= 2) {
+                return Integer.parseInt(parts[1]);
+            }
+            return 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     private static int getPatchVersion(String version) {
         try {
             String[] parts = version.split("\\.");
             if (parts.length >= 3) {
                 return Integer.parseInt(parts[2]);
-            } else if (parts.length == 2) {
-                return 0;
             }
-        } catch (Exception e) {}
-        return 0;
+            return 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static int compareVersions(String a, String b) {
+        int majorA = getMajorVersion(a);
+        int majorB = getMajorVersion(b);
+        if (majorA != majorB) return Integer.compare(majorA, majorB);
+
+        int minorA = getMinorVersion(a);
+        int minorB = getMinorVersion(b);
+        if (minorA != minorB) return Integer.compare(minorA, minorB);
+
+        int patchA = getPatchVersion(a);
+        int patchB = getPatchVersion(b);
+        return Integer.compare(patchA, patchB);
     }
 
     public static String getDefaultVersion() {
@@ -571,10 +560,8 @@ public class JsonGameRuleLoader {
     public static boolean indexExists() {
         if (indexUrl != null) {
             String content = fetchFromUrl(indexUrl);
-            if (content != null && !content.isEmpty()) {
-                return true;
-            }
+            return content != null && !content.isEmpty();
         }
-        return Files.exists(Paths.get(configDir, "index.json"));
+        return false;
     }
 }
