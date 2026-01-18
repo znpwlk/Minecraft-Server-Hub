@@ -3,6 +3,8 @@
 ## 项目简介
 
 Minecraft Server Hub (MSH) 是一个基于 Java 21 开发的 Minecraft 服务器管理工具。该工具采用模块化架构设计，提供高效的服务器进程管理和监控功能。
+<img width="2972" height="1986" alt="image" src="https://github.com/user-attachments/assets/d232b7fb-46e5-4772-b18c-24f43566cb6c" />
+
 
 ### 技术架构特点
 
@@ -13,7 +15,9 @@ Swing 图形界面：轻量级跨平台 GUI 框架
 内存安全：完善的异常处理和资源管理
 配置持久化：Properties 格式配置文件，自动保存恢复
 
+
 ## 核心功能模块
+<img width="2972" height="1986" alt="image" src="https://github.com/user-attachments/assets/338b3f3e-2ade-40ce-afbe-52791e8a8633" />
 
 ### Main.java - 主控制中心
 
@@ -139,6 +143,9 @@ ERROR：错误信息，记录影响功能的问题
 
 ### UpdateManager.java - 软件更新管理
 
+<img width="657" height="298" alt="image" src="https://github.com/user-attachments/assets/a621d878-086f-44bb-bb72-60054dbef3b7" />
+
+
 主要功能：
 自动更新检查：启动时自动检查最新版本
 版本对比：与远程版本库进行智能对比
@@ -159,6 +166,9 @@ ERROR：错误信息，记录影响功能的问题
 下载进度和状态
 
 ### AddressDialog.java - 服务器地址管理
+
+<img width="1472" height="986" alt="image" src="https://github.com/user-attachments/assets/729ac2ee-c638-4da2-9cba-9935c02f8e1f" />
+
 
 主要功能：
 地址自动检测：自动获取服务器所有可用地址
@@ -201,6 +211,9 @@ IP格式验证，确保结果正确
 
 ### JsonGameRuleLoader.java - 游戏规则配置
 
+<img width="1322" height="1736" alt="image" src="https://github.com/user-attachments/assets/1d6df81f-b66d-47e5-8087-ab4210239cc4" />
+
+
 主要功能：
 规则索引加载：从远程服务器加载游戏规则索引
 规则分类管理：按类别组织游戏规则
@@ -232,6 +245,9 @@ Big5
 ## 高级功能特性
 
 ### 进程守护服务
+
+<img width="734" height="1146" alt="image" src="https://github.com/user-attachments/assets/06783299-d2b8-4516-aa48-3d94a421452b" />
+
 
 **智能重启机制:**
 - **自动检测**: 实时监控服务器进程状态，检测异常终止
