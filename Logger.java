@@ -180,7 +180,12 @@ public class Logger {
         logQueue.offer(entry);
     }
     
-    public void shutdown() {
+    public static synchronized void shutdown() {
+        if (instance == null) return;
+        instance.doShutdown();
+    }
+    
+    private void doShutdown() {
         isRunning = false;
         logExecutor.shutdown();
         

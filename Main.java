@@ -15,11 +15,12 @@ import javax.swing.JLabel;
 
 
 public class Main {
-    public static final String VERSION = "1.1.5";
+    public static final String VERSION = "1.1.6";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
     private static Main instance;
+    private static volatile boolean shuttingDown = false;
     private JFrame frame;
     private JTabbedPane tabbedPane;
     private List<JarRunner> jarRunners;
@@ -154,6 +155,39 @@ public class Main {
         } catch (java.io.UnsupportedEncodingException e) {
             Logger.error("Failed to set console encoding: " + e.getMessage(), "Main");
         }
+        
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (shuttingDown) return;
+            shuttingDown = true;
+            Logger.info("System shutdown hook triggered", "Main");
+            if (instance != null) {
+                for (JarRunner jarRunner : instance.getJarRunners()) {
+                    try {
+                        jarRunner.stop();
+                    } catch (Exception e) {
+                        System.err.println("Failed to stop server: " + e.getMessage());
+                    }
+                }
+                
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                
+                for (JarRunner jarRunner : instance.getJarRunners()) {
+                    try {
+                        if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                            jarRunner.forceStop();
+                        }
+                        jarRunner.cleanup();
+                    } catch (Exception e) {
+                        System.err.println("Failed to cleanup server: " + e.getMessage());
+                    }
+                }
+            }
+            Logger.shutdown();
+        }, "shutdown-hook"));
         
         try {
             Logger.error("CRITICAL: Application startup initiated - JVM may be unstable", "Main");
@@ -1826,13 +1860,14 @@ public class Main {
     }
     
     private void handleWindowClosing() {
+        if (shuttingDown) return;
+        shuttingDown = true;
         Logger.info("Application shutdown initiated", "Main");
-        Logger.info("Stop signal sent to all servers", "Main");
-
+        
         JDialog progressDialog = new JDialog(frame, "正在关闭服务器", true);
         JProgressBar progressBar = new JProgressBar();
         progressBar.setIndeterminate(true);
-        JLabel statusLabel = new JLabel("正在等待服务器停止...");
+        JLabel statusLabel = new JLabel("正在发送停止命令...");
         progressBar.setPreferredSize(new Dimension(300, 25));
         progressDialog.add(BorderLayout.CENTER, progressBar);
         progressDialog.add(BorderLayout.SOUTH, statusLabel);
@@ -1840,35 +1875,52 @@ public class Main {
         progressDialog.setLocationRelativeTo(frame);
         progressDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
 
-        SwingWorker<Void, String> worker = new SwingWorker<Void, String>() {
+        SwingWorker<Boolean, String> worker = new SwingWorker<Boolean, String>() {
             @Override
-            protected Void doInBackground() {
+            protected Boolean doInBackground() {
                 for (JarRunner jarRunner : jarRunners) {
                     if (jarRunner.getStatus() == JarRunner.Status.RUNNING || jarRunner.getStatus() == JarRunner.Status.STARTING) {
                         jarRunner.stop();
                     }
                 }
+                
                 int waitCount = 0;
-                boolean allStopped = false;
-                while (waitCount < 30) {
-                    allStopped = true;
+                int maxWait = 15;
+                while (waitCount < maxWait) {
+                    boolean allStopped = true;
                     for (JarRunner jarRunner : jarRunners) {
                         if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
                             allStopped = false;
                             break;
                         }
                     }
-                    if (allStopped) break;
+                    if (allStopped) return true;
+                    
                     try {
                         Thread.sleep(500);
-                        publish("等待中... " + waitCount + "/30 秒");
+                        publish("等待服务器停止... " + (waitCount * 500 / 1000) + "/" + maxWait + " 秒");
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        break;
+                        return false;
                     }
                     waitCount++;
                 }
-                return null;
+                
+                boolean stillRunning = false;
+                for (JarRunner jarRunner : jarRunners) {
+                    if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                        stillRunning = true;
+                        jarRunner.forceStop();
+                    }
+                }
+                
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                
+                return !stillRunning;
             }
 
             @Override
@@ -1880,20 +1932,22 @@ public class Main {
 
             @Override
             protected void done() {
-                progressDialog.dispose();
-                boolean hasRunning = !jarRunners.isEmpty() && jarRunners.stream().anyMatch(r -> r.getStatus() != JarRunner.Status.STOPPED);
-                if (hasRunning) {
-                    Logger.warn("Some servers failed to shutdown gracefully", "Main");
+                try {
+                    get();
+                    progressDialog.dispose();
+                    Logger.info("Application exiting", "Main");
+                    Runtime.getRuntime().exit(0);
+                } catch (Exception e) {
+                    Logger.error("Error during shutdown: " + e.getMessage(), "Main");
+                    Runtime.getRuntime().exit(0);
                 }
-                Logger.info("Application exiting", "Main");
-                Runtime.getRuntime().exit(0);
             }
         };
 
         worker.execute();
         progressDialog.setVisible(true);
     }
-
+    
     private void showTabContextMenu(int tabIndex, int x, int y) {
         if (tabIndex <= 0) {
             return;
