@@ -70,27 +70,36 @@ public class ColorOutputPanel extends JScrollPane {
     
     public void appendColorText(String text) {
         try {
-            Pattern pattern = Pattern.compile("\u001B\\[(\\d+(?:;\\d+)*)m");
-            Matcher matcher = pattern.matcher(text);
-            int lastIndex = 0;
-            while (matcher.find()) {
-                String plainText = text.substring(lastIndex, matcher.start());
-                if (!plainText.isEmpty()) {
-                    document.insertString(document.getLength(), plainText, currentAttr);
-                }
-                String colorCode = matcher.group(1);
-                if (colorCode != null && !colorCode.trim().isEmpty()) {
-                    applyColorCode(colorCode.trim());
-                }
-                lastIndex = matcher.end();
+            if (Thread.currentThread().isInterrupted()) {
+                return;
             }
-            String remainingText = text.substring(lastIndex);
-            if (!remainingText.isEmpty()) {
-                document.insertString(document.getLength(), remainingText, currentAttr);
+            synchronized (this) {
+                if (document == null || text == null) return;
+                try {
+                    Pattern pattern = Pattern.compile("\u001B\\[(\\d+(?:;\\d+)*)m");
+                    Matcher matcher = pattern.matcher(text);
+                    int lastIndex = 0;
+                    while (matcher.find()) {
+                        String plainText = text.substring(lastIndex, matcher.start());
+                        if (!plainText.isEmpty()) {
+                            document.insertString(document.getLength(), plainText, currentAttr);
+                        }
+                        String colorCode = matcher.group(1);
+                        if (colorCode != null && !colorCode.trim().isEmpty()) {
+                            applyColorCode(colorCode.trim());
+                        }
+                        lastIndex = matcher.end();
+                    }
+                    String remainingText = text.substring(lastIndex);
+                    if (!remainingText.isEmpty()) {
+                        document.insertString(document.getLength(), remainingText, currentAttr);
+                    }
+                    textPane.setCaretPosition(document.getLength());
+                } catch (BadLocationException e) {
+                } catch (IllegalStateException e) {
+                }
             }
-            textPane.setCaretPosition(document.getLength());
-        } catch (BadLocationException e) {
-            Logger.error("Failed to append color text: " + e.getMessage(), "ColorOutputPanel");
+        } catch (Exception e) {
         }
     }
     private void applyColorCode(String colorCode) {

@@ -31,12 +31,16 @@ public class OutputHandler implements Runnable {
         this.jarRunner = jarRunner;
         this.jarPath = jarPath;
     }
+
     @Override
     public void run() {
         String line;
         try {
             Logger.error("CRITICAL: Output processing thread started for: " + jarPath, "OutputHandler");
             while ((line = reader.readLine()) != null) {
+                if (jarRunner != null && !jarRunner.canOutputHandlerWrite()) {
+                    break;
+                }
                 try {
                     outputPanel.appendColorText(line + "\n");
                     if (!eulaChecked && (line.contains("EULA") || line.contains("eula.txt"))) {
@@ -119,14 +123,33 @@ public class OutputHandler implements Runnable {
                         jarRunner.onServerStopping();
                     } else if (line.contains("Saving players")) {
                         outputPanel.append("[MSH] 正在保存玩家数据...\n");
+                        jarRunner.onServerStopping();
                     } else if (line.contains("Saving worlds")) {
                         outputPanel.append("[MSH] 正在保存世界数据...\n");
+                        jarRunner.onServerStopping();
                     } else if (line.contains("Saving chunks for level")) {
                         outputPanel.append("[MSH] 正在保存区块数据...\n");
+                        jarRunner.onServerStopping();
                     } else if (line.contains("All chunks are saved")) {
                         outputPanel.append("[MSH] 所有区块已保存\n");
+                        jarRunner.onServerStopping();
                     } else if (line.contains("Done saving")) {
                         outputPanel.append("[MSH] 数据保存完成\n");
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("Server stopped")) {
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("All RegionFile I/O tasks to complete")) {
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("Shutting down") || line.contains("shutting down")) {
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("Stopping all worlds")) {
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("Unloading world") || line.contains("Unloading level")) {
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("Closing level") || line.contains("Closing world")) {
+                        jarRunner.onServerStopping();
+                    } else if (line.contains("Stopping Rcon connection")) {
+                        jarRunner.onServerStopping();
                     } else if (line.contains("Seed:")) {
                         String seed = line.substring(line.indexOf("Seed:")).trim();
                         outputPanel.append("[MSH] " + seed.replace("Seed:", "世界种子:") + "\n");
@@ -306,13 +329,5 @@ public class OutputHandler implements Runnable {
         } catch (Exception e) {
             Logger.error("Failed to detect MC version: " + e.getMessage(), "OutputHandler");
         }
-    }
-
-    public static GameRuleConfig.MCVersion getDetectedVersion() {
-        return detectedVersion;
-    }
-
-    public static void resetDetectedVersion() {
-        detectedVersion = null;
     }
 }

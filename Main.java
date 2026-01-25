@@ -15,7 +15,7 @@ import javax.swing.JLabel;
 
 
 public class Main {
-    public static final String VERSION = "1.1.7";
+    public static final String VERSION = "1.1.8";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -163,16 +163,32 @@ public class Main {
             if (instance != null) {
                 for (JarRunner jarRunner : instance.getJarRunners()) {
                     try {
-                        jarRunner.stop();
+                        if (jarRunner.getStatus() == JarRunner.Status.RUNNING) {
+                            jarRunner.stop();
+                        }
                     } catch (Exception e) {
                         System.err.println("Failed to stop server: " + e.getMessage());
                     }
                 }
                 
-                try {
-                    Thread.sleep(5000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                int waitCount = 0;
+                while (waitCount < 60) {
+                    boolean allStopped = true;
+                    for (JarRunner jarRunner : instance.getJarRunners()) {
+                        if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                            allStopped = false;
+                            break;
+                        }
+                    }
+                    if (allStopped) break;
+                    
+                    try {
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    waitCount++;
                 }
                 
                 for (JarRunner jarRunner : instance.getJarRunners()) {
@@ -249,7 +265,11 @@ public class Main {
             public void windowClosing(WindowEvent e) {
                 boolean hasRunningServer = !jarRunners.isEmpty() && jarRunners.stream().anyMatch(runner -> 
                     runner.getStatus() == JarRunner.Status.RUNNING || runner.getStatus() == JarRunner.Status.STARTING);
-                if (hasRunningServer) {
+                boolean isStopping = !jarRunners.isEmpty() && jarRunners.stream().anyMatch(runner -> 
+                    runner.getStatus() == JarRunner.Status.STOPPING);
+                if (isStopping) {
+                    handleWindowClosing();
+                } else if (hasRunningServer) {
                     String[] options = {"关闭服务器并退出", "让服务器在后台运行", "取消"};
                     int choice = JOptionPane.showOptionDialog(
                         frame,
@@ -1879,13 +1899,13 @@ public class Main {
             @Override
             protected Boolean doInBackground() {
                 for (JarRunner jarRunner : jarRunners) {
-                    if (jarRunner.getStatus() == JarRunner.Status.RUNNING || jarRunner.getStatus() == JarRunner.Status.STARTING) {
+                    if (jarRunner.getStatus() == JarRunner.Status.RUNNING) {
                         jarRunner.stop();
                     }
                 }
                 
                 int waitCount = 0;
-                int maxWait = 15;
+                int maxWait = 30;
                 while (waitCount < maxWait) {
                     boolean allStopped = true;
                     for (JarRunner jarRunner : jarRunners) {
@@ -1899,6 +1919,32 @@ public class Main {
                     try {
                         Thread.sleep(500);
                         publish("等待服务器停止... " + (waitCount * 500 / 1000) + "/" + maxWait + " 秒");
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                    waitCount++;
+                }
+                
+                for (JarRunner jarRunner : jarRunners) {
+                    if (jarRunner.getStatus() == JarRunner.Status.RUNNING) {
+                        jarRunner.stop();
+                    }
+                }
+                
+                waitCount = 0;
+                while (waitCount < 10) {
+                    boolean allStopped = true;
+                    for (JarRunner jarRunner : jarRunners) {
+                        if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                            allStopped = false;
+                            break;
+                        }
+                    }
+                    if (allStopped) return true;
+                    
+                    try {
+                        Thread.sleep(500);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                         return false;
@@ -1961,7 +2007,41 @@ public class Main {
         closeItem.addActionListener(a -> closeServerTab(tabIndex));
         menu.add(closeItem);
         
+        JMenuItem killProcessItem = new JMenuItem("强制终止进程");
+        killProcessItem.addActionListener(a -> killServerProcess(tabIndex));
+        menu.add(killProcessItem);
+        
         menu.show(frame, x, y);
+    }
+    
+    private void killServerProcess(int tabIndex) {
+        if (tabIndex <= 0) {
+            return;
+        }
+        JarRunner jarRunner = jarRunners.get(tabIndex - 1);
+        String serverName = jarRunner.getDisplayName();
+        
+        int confirm = JOptionPane.showConfirmDialog(
+            frame,
+            "确定要强制终止服务器 '" + serverName + "' 的所有相关进程吗？\n这将立即停止服务器且不会发送停止命令。",
+            "确认终止进程",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        
+        if (confirm != JOptionPane.YES_OPTION) {
+            return;
+        }
+        
+        jarRunner.forceStopWithWait();
+        jarRunner.checkAndKillLeftoverProcesses();
+        
+        JOptionPane.showMessageDialog(
+            frame,
+            "进程终止完成。请重新启动服务器。",
+            "操作完成",
+            JOptionPane.INFORMATION_MESSAGE
+        );
     }
 
     private void renameServerTab(int tabIndex) {
