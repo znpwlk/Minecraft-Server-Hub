@@ -1,7 +1,10 @@
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.event.TableModelListener;
 import java.awt.*;
 import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Map;
 import java.util.Set;
 import com.google.gson.*;
@@ -14,6 +17,7 @@ import java.util.ArrayList;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 public class ConfigEditor extends JDialog {
     private enum ConfigType {
         STRING, BOOLEAN, NUMBER, SELECT
@@ -125,6 +129,12 @@ public class ConfigEditor extends JDialog {
         };
         listTable = new JTable(listTableModel);
         listTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        listTableModel.addTableModelListener(e -> {
+            if (selectedConfigFile != null && selectedConfigFile.exists() && isListTypeConfig(selectedConfigFile.getName())) {
+                saveListConfig();
+                statusLabel.setText("配置已自动保存: " + selectedConfigFile.getName());
+            }
+        });
         JScrollPane listScrollPane = new JScrollPane(listTable);
         listEditorPanel.add(listScrollPane, BorderLayout.CENTER);
         JPanel listActionPanel = new JPanel(new BorderLayout(10, 5));
@@ -949,9 +959,63 @@ public class ConfigEditor extends JDialog {
                 return;
             }
         }
+        String uuid = fetchPlayerUUID(playerName);
         String defaultLevel = selectedConfigFile.getName().equals("ops.json") ? "4" : "";
-        listTableModel.addRow(new Object[]{playerName, "", "", "控制台", defaultLevel});
+        listTableModel.addRow(new Object[]{playerName, uuid, String.valueOf(System.currentTimeMillis()), "控制台", defaultLevel});
         playerNameField.setText("");
+        statusLabel.setText("已添加玩家 " + playerName + "，配置已自动保存");
+    }
+    
+    private String fetchPlayerUUID(String playerName) {
+        try {
+            URL url = new URL("https://api.mojang.com/users/profiles/minecraft/" + playerName);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            int responseCode = conn.getResponseCode();
+            if (responseCode == 200) {
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                reader.close();
+                JsonObject jsonObject = JsonParser.parseString(response.toString()).getAsJsonObject();
+                if (jsonObject.has("id")) {
+                    String rawUuid = jsonObject.get("id").getAsString();
+                    return formatUuid(rawUuid);
+                }
+            }
+        } catch (Exception e) {
+            Logger.warn("Failed to fetch UUID from Mojang API for player " + playerName + ": " + e.getMessage(), "ConfigEditor");
+        }
+        return generateOfflineUUID(playerName);
+    }
+    
+    private String formatUuid(String rawUuid) {
+        if (rawUuid.length() == 32) {
+            return rawUuid.substring(0, 8) + "-" + rawUuid.substring(8, 12) + "-" + rawUuid.substring(12, 16) + "-" + rawUuid.substring(16, 20) + "-" + rawUuid.substring(20, 32);
+        }
+        return rawUuid;
+    }
+    
+    private String generateOfflineUUID(String playerName) {
+        String hash = "OfflinePlayer:" + playerName;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(hash.getBytes(StandardCharsets.UTF_8));
+            digest[6] = (byte) ((digest[6] & 0x0f) | 0x30);
+            digest[8] = (byte) ((digest[8] & 0x3f) | 0x80);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < digest.length; i++) {
+                sb.append(String.format("%02x", digest[i]));
+            }
+            return formatUuid(sb.toString());
+        } catch (Exception e) {
+            return UUID.nameUUIDFromBytes(("OfflinePlayer:" + playerName).getBytes(StandardCharsets.UTF_8)).toString();
+        }
     }
     private void removeSelectedPlayer() {
         int selectedRow = listTable.getSelectedRow();

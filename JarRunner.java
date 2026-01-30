@@ -86,6 +86,7 @@ public class JarRunner {
     private volatile boolean lockDialogShown = false;
     private volatile boolean pendingRestart = false;
     private volatile boolean userForceStop = false;
+    private volatile boolean eulaExit = false;
     
     public JarRunner(String jarPath, ColorOutputPanel outputPanel) {
         this.jarPath = jarPath;
@@ -733,6 +734,16 @@ public class JarRunner {
         if (isNormalStop && !forceKeepAlive) {
             Logger.info("Server normal shutdown, skipping auto-restart: " + jarPath, "JarRunner");
             safeAppend("[MSH] 服务器正常关闭，跳过自动重启\n");
+            pendingRestart = false;
+            status = Status.STOPPED;
+            cleanupProcess();
+            cleanupLockFilesDelayed();
+            return;
+        }
+        
+        if (eulaExit) {
+            Logger.info("Server exited due to EULA rejection: " + jarPath, "JarRunner");
+            safeAppend("[MSH] 服务器因未同意EULA而退出\n");
             pendingRestart = false;
             status = Status.STOPPED;
             cleanupProcess();
@@ -1909,6 +1920,10 @@ public class JarRunner {
     
     public boolean canOutputHandlerWrite() {
         return !outputHandlerStopped;
+    }
+    
+    public void setEulaExit(boolean eulaExit) {
+        this.eulaExit = eulaExit;
     }
     
     private volatile boolean cleanupCalled = false;

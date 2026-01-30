@@ -192,11 +192,7 @@ public class GameRuleDialog extends JDialog {
             JButton refreshConfigButton = new JButton("刷新配置");
             JButton closeButton = new JButton("关闭");
 
-            if (JsonGameRuleLoader.isLoadedFromRemote()) {
-                refreshConfigButton.setEnabled(true);
-            } else {
-                refreshConfigButton.setEnabled(false);
-            }
+            refreshConfigButton.setEnabled(true);
 
             refreshButton.addActionListener(e -> {
                 if (!isDisposed.get() && !isLoading.getAndSet(true)) {
@@ -207,7 +203,11 @@ public class GameRuleDialog extends JDialog {
 
             refreshConfigButton.addActionListener(e -> {
                 if (!isDisposed.get()) {
-                    JsonGameRuleLoader.refreshFromRemote();
+                    String currentVersion = GameRuleConfig.getActiveJsonVersion();
+                    if (currentVersion == null) {
+                        currentVersion = GameRuleConfig.MCVersion.toJsonVersion(GameRuleConfig.getCurrentVersion());
+                    }
+                    JsonGameRuleLoader.refreshFromRemote(currentVersion);
                     GameRuleConfig.clearCache();
                     jarRunner.getOutputPanel().append("[MSH] 正在从云端刷新配置...\n");
                     reloadRules();

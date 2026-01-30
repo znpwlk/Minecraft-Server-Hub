@@ -292,6 +292,8 @@ public class OutputHandler implements Runnable {
                         Logger.error("Failed to modify eula.txt: " + e.getMessage(), "OutputHandler");
                         outputPanel.append("[MSH] 修改eula.txt失败: " + e.getMessage() + "\n");
                     }
+                } else if (option == JOptionPane.NO_OPTION) {
+                    jarRunner.setEulaExit(true);
                 }
             });
         }

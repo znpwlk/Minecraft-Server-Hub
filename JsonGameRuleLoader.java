@@ -209,23 +209,19 @@ public class JsonGameRuleLoader {
         }
 
         JsonGameRuleSet ruleSet = null;
-        String fileName = null;
-        boolean fromRemote = false;
-
-        IndexData index = loadIndex();
-        if (index != null && index.versionMapping != null) {
-            String mappedVersion = index.versionMapping.get(version);
-            if (mappedVersion != null) {
-                fileName = mappedVersion;
-            }
-        }
-
-        if (fileName == null) {
-            fileName = version;
-        }
-
+        String fileName = version;
         if (!fileName.toLowerCase().endsWith(".json")) {
             fileName = fileName + ".json";
+        }
+
+        Path cachePath = Paths.get(CACHE_DIR, fileName);
+        String localContent = readFromFile(cachePath.toString());
+        if (localContent != null) {
+            ruleSet = parseJson(localContent, version);
+            if (ruleSet != null && ruleSet.gameRules != null && !ruleSet.gameRules.isEmpty()) {
+                CACHE.put(version, ruleSet);
+                return ruleSet;
+            }
         }
 
         String baseUrl = getBaseUrl();
@@ -236,25 +232,14 @@ public class JsonGameRuleLoader {
                 ruleSet = parseJson(content, version);
                 if (ruleSet != null) {
                     saveToCache(fileName, content);
-                    fromRemote = true;
+                    loadedFromRemote = true;
+                    lastRemoteLoadTime = System.currentTimeMillis();
                 }
-            }
-        }
-
-        if (ruleSet == null) {
-            Path cachePath = Paths.get(CACHE_DIR, fileName);
-            String content = readFromFile(cachePath.toString());
-            if (content != null) {
-                ruleSet = parseJson(content, version);
             }
         }
 
         if (ruleSet != null && ruleSet.gameRules != null && !ruleSet.gameRules.isEmpty()) {
             CACHE.put(version, ruleSet);
-            if (fromRemote) {
-                loadedFromRemote = true;
-                lastRemoteLoadTime = System.currentTimeMillis();
-            }
         }
 
         return ruleSet;
@@ -280,11 +265,28 @@ public class JsonGameRuleLoader {
         return lastRemoteLoadTime;
     }
 
-    public static void refreshFromRemote() {
+    public static void refreshFromRemote(String version) {
+        if (version == null || version.isEmpty()) {
+            return;
+        }
+        
         clearCache();
-        loadedFromRemote = false;
-        lastRemoteLoadTime = 0;
-        loadFromJson("1.21.11");
+        
+        String fileName = version;
+        if (!fileName.toLowerCase().endsWith(".json")) {
+            fileName = fileName + ".json";
+        }
+        
+        String baseUrl = getBaseUrl();
+        if (baseUrl != null) {
+            String remoteUrl = baseUrl + "d/" + fileName;
+            String content = fetchFromUrl(remoteUrl);
+            if (content != null) {
+                saveToCache(fileName, content);
+                loadedFromRemote = true;
+                lastRemoteLoadTime = System.currentTimeMillis();
+            }
+        }
     }
 
     private static JsonGameRuleSet parseJson(String json, String version) {
@@ -429,7 +431,7 @@ public class JsonGameRuleLoader {
 
     public static String[] getAvailableVersions() {
         IndexData index = loadIndex();
-        if (index != null && index.versionMapping != null) {
+        if (index != null && index.versionMapping != null && !index.versionMapping.isEmpty()) {
             Collection<String> versionValues = index.versionMapping.values();
             List<String> sorted = new ArrayList<>(versionValues);
             Collections.sort(sorted, (a, b) -> {
@@ -442,6 +444,36 @@ public class JsonGameRuleLoader {
                 }
             });
             return sorted.toArray(new String[0]);
+        }
+        
+        Path cacheDirPath = Paths.get(CACHE_DIR);
+        if (Files.exists(cacheDirPath)) {
+            try {
+                List<String> localVersions = new ArrayList<>();
+                File[] files = cacheDirPath.toFile().listFiles((dir, name) -> name.endsWith(".json"));
+                if (files != null) {
+                    for (File file : files) {
+                        String fileName = file.getName();
+                        String version = fileName.replace(".json", "");
+                        if (!version.isEmpty()) {
+                            localVersions.add(version);
+                        }
+                    }
+                }
+                if (!localVersions.isEmpty()) {
+                    Collections.sort(localVersions, (a, b) -> {
+                        try {
+                            double va = Double.parseDouble(a.replace(".", "").substring(0, Math.min(4, a.length())));
+                            double vb = Double.parseDouble(b.replace(".", "").substring(0, Math.min(4, b.length())));
+                            return Double.compare(va, vb);
+                        } catch (Exception e) {
+                            return a.compareTo(b);
+                        }
+                    });
+                    return localVersions.toArray(new String[0]);
+                }
+            } catch (Exception e) {
+            }
         }
 
         return new String[0];
