@@ -41,6 +41,9 @@ public class OutputHandler implements Runnable {
                 if (jarRunner != null && !jarRunner.canOutputHandlerWrite()) {
                     break;
                 }
+                if (jarRunner != null) {
+                    jarRunner.updateLastAccessTime();
+                }
                 try {
                     outputPanel.appendColorText(line + "\n");
                     if (!eulaChecked && (line.contains("EULA") || line.contains("eula.txt"))) {

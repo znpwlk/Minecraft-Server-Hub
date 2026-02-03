@@ -15,7 +15,7 @@ import javax.swing.JLabel;
 
 
 public class Main {
-    public static final String VERSION = "1.1.9";
+    public static final String VERSION = "1.1.10";
     private static final String AUTHOR = "znpwlk";
     private static final String APP_NAME = "Minecraft Server Hub";
     private static final String APP_SHORT_NAME = "MSH";
@@ -172,7 +172,7 @@ public class Main {
                 }
                 
                 int waitCount = 0;
-                while (waitCount < 60) {
+                while (waitCount < 30) {
                     boolean allStopped = true;
                     for (JarRunner jarRunner : instance.getJarRunners()) {
                         if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
@@ -194,7 +194,7 @@ public class Main {
                 for (JarRunner jarRunner : instance.getJarRunners()) {
                     try {
                         if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
-                            jarRunner.forceStop();
+                            jarRunner.forceStopWithWait(true);
                         }
                         jarRunner.cleanup();
                     } catch (Exception e) {
@@ -1894,6 +1894,8 @@ public class Main {
         progressDialog.pack();
         progressDialog.setLocationRelativeTo(frame);
         progressDialog.setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
+        
+        final boolean[] useSystemKill = {false};
 
         SwingWorker<Boolean, String> worker = new SwingWorker<Boolean, String>() {
             @Override
@@ -1952,6 +1954,7 @@ public class Main {
                     waitCount++;
                 }
                 
+                publish("强制停止服务器...");
                 boolean stillRunning = false;
                 for (JarRunner jarRunner : jarRunners) {
                     if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
@@ -1961,12 +1964,35 @@ public class Main {
                 }
                 
                 try {
-                    Thread.sleep(1000);
+                    Thread.sleep(1500);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
                 
-                return !stillRunning;
+                for (JarRunner jarRunner : jarRunners) {
+                    if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                        stillRunning = true;
+                        break;
+                    }
+                }
+                
+                if (stillRunning) {
+                    useSystemKill[0] = true;
+                    publish("使用系统命令强制终止...");
+                    for (JarRunner jarRunner : jarRunners) {
+                        if (jarRunner.getStatus() != JarRunner.Status.STOPPED) {
+                            jarRunner.forceStopWithWait(true);
+                        }
+                    }
+                    
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                
+                return true;
             }
 
             @Override
@@ -1981,7 +2007,11 @@ public class Main {
                 try {
                     get();
                     progressDialog.dispose();
-                    Logger.info("Application exiting", "Main");
+                    if (useSystemKill[0]) {
+                        Logger.info("Application exited with system kill", "Main");
+                    } else {
+                        Logger.info("Application exiting normally", "Main");
+                    }
                     Runtime.getRuntime().exit(0);
                 } catch (Exception e) {
                     Logger.error("Error during shutdown: " + e.getMessage(), "Main");
